@@ -10,6 +10,7 @@ import (
 	"math"
 	stdpath "path"
 	"strconv"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/drivers/base"
 	"github.com/OpenListTeam/OpenList/pkg/utils"
@@ -146,6 +147,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	// precreate file
 	rawPath := stdpath.Join(dstDir.GetPath(), stream.GetName())
 	path := encodeURIComponent(rawPath)
+	streamSize := stream.GetSize()
 
 	var precreateBlockListStr string
 	if stream.GetSize() > initialChunkSize {
@@ -159,6 +161,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		"autoinit":              "1",
 		"target_path":           dstDir.GetPath(),
 		"block_list":            precreateBlockListStr,
+		"size":                  strconv.FormatInt(stream.GetSize(), 10),
 		"local_mtime":           strconv.FormatInt(stream.ModTime().Unix(), 10),
 		"file_limit_switch_v34": "true",
 	}
@@ -191,9 +194,9 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		"web":        "1",
 		"channel":    "dubox",
 		"clienttype": "0",
+		"uploadsign": "0",
 	}
 
-	streamSize := stream.GetSize()
 	chunkSize := calculateChunkSize(streamSize)
 	chunkByteData := make([]byte, chunkSize)
 	count := int(math.Ceil(float64(streamSize) / float64(chunkSize)))
@@ -228,7 +231,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		res, err := base.RestyClient.R().
 			SetContext(ctx).
 			SetQueryParams(params).
-			SetFileReader("file", stream.GetName(), driver.NewLimitedUploadStream(ctx, bytes.NewReader(byteData))).
+			SetFileReader("file", stream.GetName(), bytes.NewReader(byteData)).
 			SetHeader("Cookie", d.Cookie).
 			Post(u)
 		if err != nil {
@@ -267,6 +270,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	if createResp.Errno != 0 {
 		return fmt.Errorf("[terabox] failed to create file, errno: %d", createResp.Errno)
 	}
+	time.Sleep(time.Duration(len(precreateResp.BlockList)/16+5) * time.Second)
 	return nil
 }
 
