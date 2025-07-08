@@ -437,6 +437,7 @@ func calculateChunkSize(streamSize int64) int64 {
 	}
 
 	return chunkSize
+ } 
 
 
 var _ driver.Driver = (*Terabox)(nil)
