@@ -420,23 +420,23 @@ func encodeURIComponent(str string) string {
 // Fix the calculateChunkSize function
 func calculateChunkSize(streamSize int64) int64 {
     const (
-        initialChunkSize     = 4 << 20 // 4MB (implicitly int64)
-        initialSizeThreshold = 4 << 30 // 4GB (implicitly int64)
+        initialChunkSize     int64 = 4 << 20 // 4MB (explicit int64)
+        initialSizeThreshold int64 = 4 << 30 // 4GB (explicit int64)
     )
     
     chunkSize := initialChunkSize
     sizeThreshold := initialSizeThreshold
 
-    if streamSize < chunkSize {
-        return streamSize
-    }
+	if streamSize < chunkSize {
+		return streamSize
+	}
 
-    for streamSize > sizeThreshold {
-        chunkSize <<= 1
-        sizeThreshold <<= 1
-    }
+	for streamSize > sizeThreshold {
+		chunkSize *= 2 // Using multiplication instead of bitshift for clarity
+		sizeThreshold *= 2
+	}
 
-    return chunkSize
-}
+	return chunkSize
+
 
 var _ driver.Driver = (*Terabox)(nil)
