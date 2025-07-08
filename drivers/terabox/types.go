@@ -103,3 +103,27 @@ type LocateUploadResp struct {
 type CreateResp struct {
 	Errno int `json:"errno"`
 }
+
+// NEW: Types for chunked upload status tracking
+type UploadStatus struct {
+	UploadID    string   `json:"upload_id"`
+	BlockList   []string `json:"block_list"`
+	ChunkSize   int64    `json:"chunk_size"`
+	TotalChunks int      `json:"total_chunks"`
+	Completed   int      `json:"completed"`
+}
+
+// NEW: Response type for chunk upload operations
+type ChunkUploadResp struct {
+	Errno     int    `json:"errno"`
+	UploadID  string `json:"upload_id"`
+	BlockList []int  `json:"block_list"`
+	//RequestID int64  `json:"request_id"`
+}
+
+// NEW: Configuration for chunked uploads
+type UploadConfig struct {
+	ChunkThreshold int64 `json:"chunk_threshold"` // Minimum size for chunked upload (20MB default)
+	MaxChunkSize   int64 `json:"max_chunk_size"`  // Maximum chunk size (20MB default)
+	MinChunkSize   int64 `json:"min_chunk_size"`  // Minimum chunk size (4MB default)
+}
