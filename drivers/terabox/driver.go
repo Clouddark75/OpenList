@@ -417,12 +417,11 @@ func encodeURIComponent(str string) string {
 	return r
 }
 
-// [Previous imports and code remain exactly the same until calculateChunkSize]
-
+// Fix the calculateChunkSize function
 func calculateChunkSize(streamSize int64) int64 {
     const (
-        initialChunkSize     int64 = 4 << 20 // 4MB
-        initialSizeThreshold int64 = 4 << 30 // 4GB
+        initialChunkSize     = 4 << 20 // 4MB (implicitly int64)
+        initialSizeThreshold = 4 << 30 // 4GB (implicitly int64)
     )
     
     chunkSize := initialChunkSize
@@ -438,9 +437,6 @@ func calculateChunkSize(streamSize int64) int64 {
     }
 
     return chunkSize
-}
-
-// [Rest of the file remains exactly the same]
 }
 
 var _ driver.Driver = (*Terabox)(nil)
