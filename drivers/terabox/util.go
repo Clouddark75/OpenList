@@ -4,10 +4,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -21,6 +19,8 @@ const (
 	initialChunkSize     int64 = 4 << 20 // 4MB
 	initialSizeThreshold int64 = 4 << 30 // 4GB
 )
+
+// [All other functions remain exactly the same]
 
 func getStrBetween(raw, start, end string) string {
 	regexPattern := fmt.Sprintf(`%s(.*?)%s`, regexp.QuoteMeta(start), regexp.QuoteMeta(end))
