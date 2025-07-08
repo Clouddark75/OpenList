@@ -20,9 +20,6 @@ import (
 const (
 	initialChunkSize     int64 = 4 << 20 // 4MB
 	initialSizeThreshold int64 = 4 << 30 // 4GB
-	// NEW: Constants for chunked upload optimization
-	maxChunkSize        int64 = 20 << 20 // 20MB
-	chunkThreshold      int64 = 20 << 20 // 20MB minimum for chunked upload
 )
 
 func getStrBetween(raw, start, end string) string {
@@ -263,50 +260,4 @@ func (d *Terabox) manage(opera string, filelist interface{}) ([]byte, error) {
 	}
 	data := fmt.Sprintf("async=0&filelist=%s&ondup=newcopy", encodeURIComponent(string(marshal)))
 	return d.post("/api/filemanager", params, data, nil)
-}
-
-func encodeURIComponent(str string) string {
-	r := url.QueryEscape(str)
-	r = strings.ReplaceAll(r, "+", "%20")
-	return r
-}
-
-// Updated calculateChunkSize with optimized chunking strategy
-func calculateChunkSize(streamSize int64) int64 {
-	// For very small files, use single chunk
-	if streamSize <= initialChunkSize {
-		return streamSize
-	}
-
-	// For medium files (up to chunkThreshold), use default chunk size
-	if streamSize <= chunkThreshold {
-		return initialChunkSize
-	}
-
-	// For large files, use dynamic chunk sizing
-	chunkSize := initialChunkSize
-	for streamSize/chunkSize > 100 && chunkSize < maxChunkSize {
-		chunkSize *= 2
-	}
-
-	// Ensure chunk size doesn't exceed max
-	if chunkSize > maxChunkSize {
-		return maxChunkSize
-	}
-
-	return chunkSize
-}
-
-// NEW: Helper function for chunked upload validation
-func validateChunkUpload(resp *resty.Response) error {
-	if resp.StatusCode() >= 400 {
-		return fmt.Errorf("chunk upload failed with status %d", resp.StatusCode())
-	}
-
-	errno := utils.Json.Get(resp.Body(), "errno").ToInt()
-	if errno != 0 {
-		return fmt.Errorf("chunk upload API error: %d", errno)
-	}
-
-	return nil
 }
