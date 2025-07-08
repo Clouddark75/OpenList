@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
+	"os"
 	stdpath "path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -129,14 +132,13 @@ func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 	return err
 }
 
-// Put implements driver.Driver.
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	// NEW: Automatic switching to optimized chunked upload for large files
-	if stream.GetSize() > 20<<20 { // 20MB threshold
+	// Automatic switching to chunked upload for files >20MB
+	if stream.GetSize() > 20<<20 {
 		return d.chunkedUpload(ctx, dstDir, stream, up)
 	}
 
-	// Original upload implementation below
+	// Original single file upload implementation
 	resp, err := base.RestyClient.R().
 		SetContext(ctx).
 		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
@@ -277,13 +279,29 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	return nil
 }
 
-// NEW: chunkedUpload handles large files more efficiently
 func (d *Terabox) chunkedUpload(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
 	log.WithFields(log.Fields{
 		"size": stream.GetSize(),
 		"name": stream.GetName(),
-	}).Debug("Using optimized chunked upload")
+	}).Debug("Starting optimized chunked upload")
 
+	// Create temp file
+	tempFile, err := os.CreateTemp("", "terabox-upload-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	// Write stream to temp file
+	if _, err := io.Copy(tempFile, stream); err != nil {
+		return fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	if _, err := tempFile.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to seek temp file: %w", err)
+	}
+
+	// Initialize upload session
 	resp, err := base.RestyClient.R().
 		SetContext(ctx).
 		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
@@ -299,12 +317,11 @@ func (d *Terabox) chunkedUpload(ctx context.Context, dstDir model.Obj, stream mo
 	rawPath := stdpath.Join(dstDir.GetPath(), stream.GetName())
 	path := encodeURIComponent(rawPath)
 
-	// Initialize upload session
 	precreateData := map[string]string{
 		"path":                  rawPath,
 		"autoinit":              "1",
 		"target_path":           dstDir.GetPath(),
-		"block_list":            `["5910a591dd8fc18c32a8f3df4fdc1761"]`, // Initial block
+		"block_list":            `["5910a591dd8fc18c32a8f3df4fdc1761"]`,
 		"size":                  strconv.FormatInt(stream.GetSize(), 10),
 		"local_mtime":           strconv.FormatInt(stream.ModTime().Unix(), 10),
 		"file_limit_switch_v34": "true",
@@ -320,12 +337,6 @@ func (d *Terabox) chunkedUpload(ctx context.Context, dstDir model.Obj, stream mo
 	}
 
 	// Upload chunks
-	tempFile, err := stream.CacheFullInTempFile()
-	if err != nil {
-		return err
-	}
-	defer tempFile.Close()
-
 	chunkSize := calculateChunkSize(stream.GetSize())
 	totalChunks := int(math.Ceil(float64(stream.GetSize()) / float64(chunkSize)))
 	uploadBlockList := make([]string, 0, totalChunks)
@@ -400,13 +411,31 @@ func (d *Terabox) chunkedUpload(ctx context.Context, dstDir model.Obj, stream mo
 	return nil
 }
 
-var _ driver.Driver = (*Terabox)(nil)
-
-// Helper functions remain unchanged
-func calculateChunkSize(fileSize int64) int64 {
-	// ... existing calculateChunkSize implementation ...
-}
-
 func encodeURIComponent(str string) string {
-	// ... existing encodeURIComponent implementation ...
+	r := url.QueryEscape(str)
+	r = strings.ReplaceAll(r, "+", "%20")
+	return r
 }
+
+func calculateChunkSize(streamSize int64) int64 {
+	const (
+		initialChunkSize     = 4 << 20 // 4MB
+		initialSizeThreshold = 4 << 30 // 4GB
+	)
+	
+	chunkSize := initialChunkSize
+	sizeThreshold := initialSizeThreshold
+
+	if streamSize < chunkSize {
+		return streamSize
+	}
+
+	for streamSize > sizeThreshold {
+		chunkSize <<= 1
+		sizeThreshold <<= 1
+	}
+
+	return chunkSize
+}
+
+var _ driver.Driver = (*Terabox)(nil)
