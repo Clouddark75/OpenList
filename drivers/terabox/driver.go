@@ -27,7 +27,7 @@ const (
 	sizeThreshold   int64 = 4 << 30   // 4GB threshold for larger chunks
 	maxUploadRetries      = 3
 	retryDelay           = 5 * time.Second
-	//defaultUploadThreads  = 3         // Default number of upload threads
+	defaultUploadThreads  = 3         // Default number of upload threads
 )
 
 type Terabox struct {
@@ -391,16 +391,11 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 
 // getUploadThreads returns the number of upload threads to use
 func (d *Terabox) getUploadThreads() int {
-	// You can add a field to the Addition struct to configure this
-	// For now, we'll use a default value
-	threads := defaultUploadThreads
-	
-	// Add logic here to read from configuration if needed
-	// if d.UploadThreads > 0 {
-	//     threads = d.UploadThreads
-	// }
-	
-	return threads
+	// Use configured upload threads if set, otherwise use default
+	if d.UploadThreads > 0 {
+		return d.UploadThreads
+	}
+	return defaultUploadThreads
 }
 
 // calculateChunkSize calculates the size of a specific chunk
