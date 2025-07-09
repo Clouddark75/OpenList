@@ -23,9 +23,9 @@ import (
 const (
 	minChunkSize    int64 = 4 << 20   // 4MB minimum chunk size
 	maxChunkSize    int64 = 128 << 20 // 128MB maximum chunk size
-	chunkThreshold  int64 = 4 << 30   // 4GB - files larger than this get bigger chunks
-	maxUploadRetries      = 3          // Maximum retry attempts per chunk
-	retryDelay           = 5 * time.Second // Delay between retries
+	sizeThreshold   int64 = 4 << 30   // 4GB threshold for larger chunks
+	maxUploadRetries      = 3
+	retryDelay           = 5 * time.Second
 )
 
 type Terabox struct {
@@ -163,7 +163,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	chunkCount := int(math.Ceil(float64(streamSize) / float64(chunkSize)))
 
 	var precreateBlockListStr string
-	if stream.GetSize() > initialChunkSize {
+	if stream.GetSize() > minChunkSize {
 		precreateBlockListStr = `["5910a591dd8fc18c32a8f3df4fdc1761","a5fc157d78e6ad1c7e114b056c92821e"]`
 	} else {
 		precreateBlockListStr = `["5910a591dd8fc18c32a8f3df4fdc1761"]`
@@ -292,7 +292,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 }
 
 func calculateOptimalChunkSize(fileSize int64) int64 {
-	chunkSize := initialChunkSize
+	chunkSize := minChunkSize
 
 	// Scale up chunk size for larger files
 	for fileSize > chunkSize*10 && chunkSize < maxChunkSize {
