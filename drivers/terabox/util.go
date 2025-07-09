@@ -17,11 +17,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const (
-	initialChunkSize     int64 = 4 << 20 // 4MB
-	initialSizeThreshold int64 = 4 << 30 // 4GB
-)
-
 func getStrBetween(raw, start, end string) string {
 	regexPattern := fmt.Sprintf(`%s(.*?)%s`, regexp.QuoteMeta(start), regexp.QuoteMeta(end))
 	regex := regexp.MustCompile(regexPattern)
@@ -82,7 +77,6 @@ func (d *Terabox) request(rurl string, method string, callback base.ReqCallback,
 	}
 	errno := utils.Json.Get(res.Body(), "errno").ToInt()
 	if errno == 4000023 {
-		// reget jsToken
 		err = d.resetJsToken()
 		if err != nil {
 			return nil, err
@@ -268,18 +262,23 @@ func encodeURIComponent(str string) string {
 	return r
 }
 
-func calculateChunkSize(streamSize int64) int64 {
-	chunkSize := initialChunkSize
-	sizeThreshold := initialSizeThreshold
-
-	if streamSize < chunkSize {
-		return streamSize
+func (d *Terabox) prepareChunkUpload(ctx context.Context, fileSize int64) (int64, error) {
+	chunkSize := calculateOptimalChunkSize(fileSize)
+	
+	_, err := d.get("/api/quota", nil, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to check quota: %w", err)
 	}
+	
+	return chunkSize, nil
+}
 
-	for streamSize > sizeThreshold {
-		chunkSize <<= 1
-		sizeThreshold <<= 1
+func (d *Terabox) verifyChunkUpload(ctx context.Context, uploadID string, chunkIndex int) error {
+	params := map[string]string{
+		"uploadid": uploadID,
+		"partseq":  strconv.Itoa(chunkIndex),
 	}
-
-	return chunkSize
+	
+	_, err := d.get("/api/verifychunk", params, nil)
+	return err
 }
