@@ -2,6 +2,7 @@ package terabox
 
 import (
 	"encoding/base64"
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -260,6 +261,23 @@ func encodeURIComponent(str string) string {
 	r := url.QueryEscape(str)
 	r = strings.ReplaceAll(r, "+", "%20")
 	return r
+}
+ 
+func (d *Terabox) getUploadServer(ctx context.Context) (string, error) {
+	resp, err := base.RestyClient.R().
+		SetContext(ctx).
+		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Host string `json:"host"`
+	}
+	if err := utils.Json.Unmarshal(resp.Body(), &result); err != nil {
+		return "", err
+	}
+	return "https://" + result.Host + "/rest/2.0/pcs/superfile2", nil
 }
 
 func (d *Terabox) prepareChunkUpload(ctx context.Context, fileSize int64) (int64, error) {
