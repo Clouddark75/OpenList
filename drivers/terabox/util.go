@@ -15,13 +15,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const (
-	initialChunkSize     int64 = 4 << 20 // 4MB
-	initialSizeThreshold int64 = 4 << 30 // 4GB
-)
-
-// [All other functions remain exactly the same]
-
 func getStrBetween(raw, start, end string) string {
 	regexPattern := fmt.Sprintf(`%s(.*?)%s`, regexp.QuoteMeta(start), regexp.QuoteMeta(end))
 	regex := regexp.MustCompile(regexPattern)
@@ -96,7 +89,7 @@ func (d *Terabox) request(rurl string, method string, callback base.ReqCallback,
 		urlDomainPrefix := header.Get("Url-Domain-Prefix")
 		if len(urlDomainPrefix) > 0 {
 			d.url_domain_prefix = urlDomainPrefix
-			d.base_url = "https://" + d.url_domain_prefix + ".terabox.com"
+			d.base_url = "https://" + urlDomainPrefix + ".terabox.com"
 			log.Debugln("Redirect base_url to", d.base_url)
 			return d.request(rurl, method, callback, resp, noRetry...)
 		}
@@ -258,6 +251,6 @@ func (d *Terabox) manage(opera string, filelist interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data := fmt.Sprintf("async=0&filelist=%s&ondup=newcopy", encodeURIComponent(string(marshal)))
+	data := fmt.Sprintf("async=0&filelist=%s&ondup=newcopy", url.QueryEscape(string(marshal)))
 	return d.post("/api/filemanager", params, data, nil)
 }
