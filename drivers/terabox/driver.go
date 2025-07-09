@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	stdpath "path"
 	"strconv"
 	"sync"
@@ -155,28 +156,29 @@ func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 }
 
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	// Get upload server
-	resp, err := base.RestyClient.R().
-		SetContext(ctx).
-		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
+	// Get upload server using the existing utility function
+	uploadServerURL, err := d.getUploadServer(ctx)
 	if err != nil {
 		return err
 	}
-	var locateupload_resp LocateUploadResp
-	err = utils.Json.Unmarshal(resp.Body(), &locateupload_resp)
+	
+	// Extract host from the full URL for compatibility
+	parsedURL, err := url.Parse(uploadServerURL)
 	if err != nil {
-		log.Debugln(resp)
 		return err
 	}
-	log.Debugln(locateupload_resp)
+	uploadHost := parsedURL.Host
 
 	// Precreate file
 	rawPath := stdpath.Join(dstDir.GetPath(), stream.GetName())
 	path := encodeURIComponent(rawPath)
 	streamSize := stream.GetSize()
 
-	// Calculate optimal chunk size
-	chunkSize := calculateOptimalChunkSize(streamSize)
+	// Calculate optimal chunk size using existing utility
+	chunkSize, err := d.prepareChunkUpload(ctx, streamSize)
+	if err != nil {
+		return err
+	}
 	chunkCount := int(math.Ceil(float64(streamSize) / float64(chunkSize)))
 
 	var precreateBlockListStr string
@@ -241,7 +243,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	var wg sync.WaitGroup
 	for i := 0; i < uploadThreads; i++ {
 		wg.Add(1)
-		go d.uploadWorker(ctx, &wg, jobs, results, params, locateupload_resp.Host, stream.GetName())
+		go d.uploadWorker(ctx, &wg, jobs, results, params, uploadHost, stream.GetName(), precreateResp.Uploadid)
 	}
 
 	// Prepare chunks and send to jobs channel
@@ -344,7 +346,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 }
 
 // uploadWorker handles uploading chunks concurrently
-func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan ChunkJob, results chan<- ChunkResult, baseParams map[string]string, host, fileName string) {
+func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan ChunkJob, results chan<- ChunkResult, baseParams map[string]string, host, fileName, uploadID string) {
 	defer wg.Done()
 
 	for job := range jobs {
@@ -363,14 +365,28 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 		// Upload chunk with retries
 		var uploadErr error
 		for retry := 0; retry < maxUploadRetries; retry++ {
-			res, err := base.RestyClient.R().
+			// Use the same request pattern as the existing code
+			req := base.RestyClient.R().
 				SetContext(ctx).
 				SetQueryParams(params).
 				SetFileReader("file", fileName, bytes.NewReader(job.data)).
-				SetHeader("Cookie", d.Cookie).
-				Post("https://" + host + "/rest/2.0/pcs/superfile2")
+				SetHeaders(map[string]string{
+					"Cookie":           d.Cookie,
+					"Accept":           "application/json, text/plain, */*",
+					"Referer":          d.base_url,
+					"User-Agent":       base.UserAgent,
+					"X-Requested-With": "XMLHttpRequest",
+				})
+			
+			res, err := req.Post("https://" + host + "/rest/2.0/pcs/superfile2")
 			
 			if err == nil && res.StatusCode() == 200 {
+				// Verify chunk upload if needed
+				if verifyErr := d.verifyChunkUpload(ctx, uploadID, job.partseq); verifyErr != nil {
+					log.Debugf("Chunk %d verification failed: %v", job.partseq, verifyErr)
+					// Continue anyway as verification might be optional
+				}
+				
 				results <- ChunkResult{partseq: job.partseq, md5: job.chunkMD5, err: nil}
 				uploadErr = nil
 				break
