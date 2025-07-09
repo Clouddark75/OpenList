@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	minChunkSize    int64 = 4 << 20   // 4MB minimum
-	maxChunkSize    int64 = 128 << 20 // 128MB maximum
-	maxUploadRetries      = 3
-	retryDelay           = 5 * time.Second
+	minChunkSize    int64 = 4 << 20   // 4MB minimum chunk size
+	maxChunkSize    int64 = 128 << 20 // 128MB maximum chunk size
+	chunkThreshold  int64 = 4 << 30   // 4GB - files larger than this get bigger chunks
+	maxUploadRetries      = 3          // Maximum retry attempts per chunk
+	retryDelay           = 5 * time.Second // Delay between retries
 )
 
 type Terabox struct {
