@@ -13,7 +13,7 @@ type Addition struct {
 	DownloadAPI    string `json:"download_api" type:"select" options:"official,crack" default:"official"`
 	OrderBy        string `json:"order_by" type:"select" options:"name,time,size" default:"name"`
 	OrderDirection string `json:"order_direction" type:"select" options:"asc,desc" default:"asc"`
-	UploadThreads  int    `json:"upload_threads" default:"2"` // New setting
+	UploadThreads  string `json:"upload_threads" default:"2"` // New setting
 }
 
 var config = driver.Config{
