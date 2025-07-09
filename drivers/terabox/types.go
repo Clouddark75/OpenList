@@ -8,33 +8,14 @@ import (
 )
 
 type File struct {
-	//TkbindId     int    `json:"tkbind_id"`
-	//OwnerType    int    `json:"owner_type"`
-	//Category     int    `json:"category"`
-	//RealCategory string `json:"real_category"`
 	FsId        int64 `json:"fs_id"`
 	ServerMtime int64 `json:"server_mtime"`
-	//OperId      int   `json:"oper_id"`
-	//ServerCtime int   `json:"server_ctime"`
 	Thumbs struct {
-		//Icon string `json:"icon"`
 		Url3 string `json:"url3"`
-		//Url2 string `json:"url2"`
-		//Url1 string `json:"url1"`
 	} `json:"thumbs"`
-	//Wpfile         int    `json:"wpfile"`
-	//LocalMtime     int    `json:"local_mtime"`
 	Size int64 `json:"size"`
-	//ExtentTinyint7 int    `json:"extent_tinyint7"`
 	Path string `json:"path"`
-	//Share          int    `json:"share"`
-	//ServerAtime    int    `json:"server_atime"`
-	//Pl             int    `json:"pl"`
-	//LocalCtime     int    `json:"local_ctime"`
 	ServerFilename string `json:"server_filename"`
-	//Md5            string `json:"md5"`
-	//OwnerId        int    `json:"owner_id"`
-	//Unlist int `json:"unlist"`
 	Isdir int `json:"isdir"`
 }
 
@@ -42,7 +23,6 @@ type ListResp struct {
 	Errno    int    `json:"errno"`
 	GuidInfo string `json:"guid_info"`
 	List     []File `json:"list"`
-	//RequestId int64  `json:"request_id"` 接口返回有时是int有时是string
 	Guid int `json:"guid"`
 }
 
@@ -71,7 +51,6 @@ type DownloadResp2 struct {
 	Info  []struct {
 		Dlink string `json:"dlink"`
 	} `json:"info"`
-	//RequestID int64 `json:"request_id"`
 }
 
 type HomeInfoResp struct {
@@ -83,13 +62,23 @@ type HomeInfoResp struct {
 	} `json:"data"`
 }
 
+type UploadSession struct {
+	Path      string `json:"path"`
+	UploadID  string `json:"uploadid"`
+	BlockList []int  `json:"block_list"`
+	Errno     int    `json:"errno"`
+}
+
 type PrecreateResp struct {
 	Path       string `json:"path"`
 	Uploadid   string `json:"uploadid"`
 	ReturnType int    `json:"return_type"`
 	BlockList  []int  `json:"block_list"`
 	Errno      int    `json:"errno"`
-	//RequestId  int64  `json:"request_id"`
+}
+
+type CreateResp struct {
+	Errno int `json:"errno"`
 }
 
 type CheckLoginResp struct {
@@ -98,32 +87,4 @@ type CheckLoginResp struct {
 
 type LocateUploadResp struct {
 	Host string `json:"host"`
-}
-
-type CreateResp struct {
-	Errno int `json:"errno"`
-}
-
-// NEW: Types for chunked upload status tracking
-type UploadStatus struct {
-	UploadID    string   `json:"upload_id"`
-	BlockList   []string `json:"block_list"`
-	ChunkSize   int64    `json:"chunk_size"`
-	TotalChunks int      `json:"total_chunks"`
-	Completed   int      `json:"completed"`
-}
-
-// NEW: Response type for chunk upload operations
-type ChunkUploadResp struct {
-	Errno     int    `json:"errno"`
-	UploadID  string `json:"upload_id"`
-	BlockList []int  `json:"block_list"`
-	//RequestID int64  `json:"request_id"`
-}
-
-// NEW: Configuration for chunked uploads
-type UploadConfig struct {
-	ChunkThreshold int64 `json:"chunk_threshold"` // Minimum size for chunked upload (20MB default)
-	MaxChunkSize   int64 `json:"max_chunk_size"`  // Maximum chunk size (20MB default)
-	MinChunkSize   int64 `json:"min_chunk_size"`  // Minimum chunk size (4MB default)
 }
