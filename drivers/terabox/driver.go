@@ -29,6 +29,9 @@ const (
 	maxUploadRetries      = 3
 	retryDelay           = 5 * time.Second
 	defaultUploadThreads  = 3         // Default number of upload threads
+	
+	// JS token related constants
+	jsTokenRefreshRetries = 2
 )
 
 type Terabox struct {
@@ -37,6 +40,7 @@ type Terabox struct {
 	JsToken           string
 	url_domain_prefix string
 	base_url          string
+	tokenMutex        sync.RWMutex // Protects JsToken updates
 }
 
 // ChunkJob represents a chunk upload job
@@ -52,6 +56,11 @@ type ChunkResult struct {
 	partseq int
 	md5     string
 	err     error
+}
+
+// Common response structure for checking errno
+type BaseResponse struct {
+	Errno int `json:"errno"`
 }
 
 func (d *Terabox) Config() driver.Config {
@@ -100,62 +109,159 @@ func (d *Terabox) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	return d.linkOfficial(file, args)
 }
 
+// refreshJsToken uses the existing resetJsToken method with thread safety
+func (d *Terabox) refreshJsToken(ctx context.Context) error {
+	d.tokenMutex.Lock()
+	defer d.tokenMutex.Unlock()
+
+	log.Debugln("Refreshing JS token...")
+	
+	// Use the existing resetJsToken method
+	err := d.resetJsToken()
+	if err != nil {
+		return fmt.Errorf("failed to refresh JS token: %v", err)
+	}
+	
+	log.Debugln("JS token refreshed successfully")
+	return nil
+}
+
+// executeWithTokenRefresh executes a function with automatic token refresh on failure
+func (d *Terabox) executeWithTokenRefresh(ctx context.Context, operation func() error) error {
+	var lastErr error
+	
+	for attempt := 0; attempt <= jsTokenRefreshRetries; attempt++ {
+		lastErr = operation()
+		
+		if lastErr == nil {
+			return nil
+		}
+		
+		// Check if the error is due to token expiration
+		if d.isTokenExpiredError(lastErr) && attempt < jsTokenRefreshRetries {
+			log.Debugf("Token expired error detected, refreshing token (attempt %d/%d)", attempt+1, jsTokenRefreshRetries)
+			
+			if refreshErr := d.refreshJsToken(ctx); refreshErr != nil {
+				log.Errorf("Failed to refresh JS token: %v", refreshErr)
+				return fmt.Errorf("token refresh failed: %v", refreshErr)
+			}
+			
+			// Wait a bit before retrying
+			time.Sleep(time.Second)
+			continue
+		}
+		
+		break
+	}
+	
+	return lastErr
+}
+
+// isTokenExpiredError checks if an error indicates token expiration
+// Since your request() method already handles errno 4000023 token expiration,
+// we primarily check for that specific error code
+func (d *Terabox) isTokenExpiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	// Check for the specific errno 4000023 which your request() method handles
+	errStr := err.Error()
+	return contains(errStr, "4000023") ||
+		   contains(errStr, "token") && (contains(errStr, "expired") || contains(errStr, "invalid")) ||
+		   contains(errStr, "unauthorized")
+}
+
+// Helper function to check if string contains substring (case-insensitive)
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && 
+		   (s == substr || len(s) > len(substr) && 
+		    (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
+		     indexSubstring(s, substr) != -1))
+}
+
+func indexSubstring(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}
+
 func (d *Terabox) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
-	params := map[string]string{
-		"a": "commit",
-	}
-	data := map[string]string{
-		"path":       stdpath.Join(parentDir.GetPath(), dirName),
-		"isdir":      "1",
-		"block_list": "[]",
-	}
-	res, err := d.post_form("/api/create", params, data, nil)
-	log.Debugln(string(res))
-	return err
+	return d.executeWithTokenRefresh(ctx, func() error {
+		params := map[string]string{
+			"a": "commit",
+		}
+		data := map[string]string{
+			"path":       stdpath.Join(parentDir.GetPath(), dirName),
+			"isdir":      "1",
+			"block_list": "[]",
+		}
+		res, err := d.post_form("/api/create", params, data, nil)
+		log.Debugln(string(res))
+		return err
+	})
 }
 
 func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
-	data := []base.Json{
-		{
-			"path":    srcObj.GetPath(),
-			"dest":    dstDir.GetPath(),
-			"newname": srcObj.GetName(),
-		},
-	}
-	_, err := d.manage("move", data)
-	return err
+	return d.executeWithTokenRefresh(ctx, func() error {
+		data := []base.Json{
+			{
+				"path":    srcObj.GetPath(),
+				"dest":    dstDir.GetPath(),
+				"newname": srcObj.GetName(),
+			},
+		}
+		_, err := d.manage("move", data)
+		return err
+	})
 }
 
 func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
-	data := []base.Json{
-		{
-			"path":    srcObj.GetPath(),
-			"newname": newName,
-		},
-	}
-	_, err := d.manage("rename", data)
-	return err
+	return d.executeWithTokenRefresh(ctx, func() error {
+		data := []base.Json{
+			{
+				"path":    srcObj.GetPath(),
+				"newname": newName,
+			},
+		}
+		_, err := d.manage("rename", data)
+		return err
+	})
 }
 
 func (d *Terabox) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
-	data := []base.Json{
-		{
-			"path":    srcObj.GetPath(),
-			"dest":    dstDir.GetPath(),
-			"newname": srcObj.GetName(),
-		},
-	}
-	_, err := d.manage("copy", data)
-	return err
+	return d.executeWithTokenRefresh(ctx, func() error {
+		data := []base.Json{
+			{
+				"path":    srcObj.GetPath(),
+				"dest":    dstDir.GetPath(),
+				"newname": srcObj.GetName(),
+			},
+		}
+		_, err := d.manage("copy", data)
+		return err
+	})
 }
 
 func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
-	data := []string{obj.GetPath()}
-	_, err := d.manage("delete", data)
-	return err
+	return d.executeWithTokenRefresh(ctx, func() error {
+		data := []string{obj.GetPath()}
+		_, err := d.manage("delete", data)
+		return err
+	})
 }
 
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+	return d.executeWithTokenRefresh(ctx, func() error {
+		return d.performUpload(ctx, dstDir, stream, up)
+	})
+}
+
+// performUpload contains the actual upload logic, separated for token refresh handling
+func (d *Terabox) performUpload(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
 	// Get upload server using the existing utility function
 	uploadServerURL, err := d.getUploadServer(ctx)
 	if err != nil {
@@ -365,6 +471,11 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 		// Upload chunk with retries
 		var uploadErr error
 		for retry := 0; retry < maxUploadRetries; retry++ {
+			// Read the current JS token safely
+			d.tokenMutex.RLock()
+			currentJsToken := d.JsToken
+			d.tokenMutex.RUnlock()
+
 			// Use the same request pattern as the existing code
 			req := base.RestyClient.R().
 				SetContext(ctx).
@@ -376,6 +487,7 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 					"Referer":          d.base_url,
 					"User-Agent":       base.UserAgent,
 					"X-Requested-With": "XMLHttpRequest",
+					"X-JSToken":        currentJsToken, // Include JS token in request
 				})
 			
 			res, err := req.Post("https://" + host + "/rest/2.0/pcs/superfile2")
