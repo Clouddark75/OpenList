@@ -1,5 +1,7 @@
 package terabox
 
+package terabox
+
 import (
 	"bytes"
 	"context"
@@ -21,11 +23,10 @@ import (
 )
 
 const (
-	initialChunkSize     int64 = 4 << 20   // 4MB
-	initialSizeThreshold int64 = 4 << 30   // 4GB
-	maxChunkSize         int64 = 128 << 20 // 128MB
-	maxUploadRetries           = 3
-	retryDelay                = 5 * time.Second
+	minChunkSize    int64 = 4 << 20   // 4MB minimum
+	maxChunkSize    int64 = 128 << 20 // 128MB maximum
+	maxUploadRetries      = 3
+	retryDelay           = 5 * time.Second
 )
 
 type Terabox struct {
