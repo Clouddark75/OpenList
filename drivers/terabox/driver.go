@@ -23,7 +23,6 @@ import (
 const (
 	minChunkSize    int64 = 4 << 20   // 4MB minimum chunk size
 	maxChunkSize    int64 = 128 << 20 // 128MB maximum chunk size
-	sizeThreshold   int64 = 4 << 30   // 4GB threshold for larger chunks
 	maxUploadRetries      = 3
 	retryDelay           = 5 * time.Second
 )
@@ -138,7 +137,7 @@ func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 }
 
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	// Get upload server
+	// 1. Get upload server
 	resp, err := base.RestyClient.R().
 		SetContext(ctx).
 		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
@@ -151,16 +150,10 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		log.Debugln(resp)
 		return err
 	}
-	log.Debugln(locateupload_resp)
 
-	// Precreate file
+	// 2. Pre-create file
 	rawPath := stdpath.Join(dstDir.GetPath(), stream.GetName())
-	path := encodeURIComponent(rawPath)
-	streamSize := stream.GetSize()
-
-	// Calculate optimal chunk size
-	chunkSize := calculateOptimalChunkSize(streamSize)
-	chunkCount := int(math.Ceil(float64(streamSize) / float64(chunkSize)))
+	chunkSize := calculateOptimalChunkSize(stream.GetSize())
 
 	var precreateBlockListStr string
 	if stream.GetSize() > minChunkSize {
@@ -179,97 +172,36 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		"file_limit_switch_v34": "true",
 	}
 	var precreateResp PrecreateResp
-	log.Debugln(data)
-	res, err := d.post_form("/api/precreate", nil, data, &precreateResp)
+	_, err = d.post_form("/api/precreate", nil, data, &precreateResp)
 	if err != nil {
 		return err
 	}
-	log.Debugf("%+v", precreateResp)
 	if precreateResp.Errno != 0 {
-		log.Debugln(string(res))
-		return fmt.Errorf("[terabox] failed to precreate file, errno: %d", precreateResp.Errno)
+		return fmt.Errorf("precreate failed with errno: %d", precreateResp.Errno)
 	}
 	if precreateResp.ReturnType == 2 {
 		return nil
 	}
 
-	// Upload chunks
-	tempFile, err := stream.CacheFullInTempFile()
+	// 3. Upload chunks with worker pool
+	uploadedMD5s, err := d.uploadChunksWithWorkers(
+		ctx,
+		"https://"+locateupload_resp.Host+"/rest/2.0/pcs/superfile2",
+		stream,
+		precreateResp.Uploadid,
+		chunkSize,
+		up,
+	)
 	if err != nil {
 		return err
 	}
 
-	params := map[string]string{
-		"method":     "upload",
-		"path":       path,
-		"uploadid":   precreateResp.Uploadid,
-		"app_id":     "250528",
-		"web":        "1",
-		"channel":    "dubox",
-		"clienttype": "0",
-		"uploadsign": "0",
-	}
-
-	uploadBlockList := make([]string, 0, chunkCount)
-	h := md5.New()
-	buf := make([]byte, chunkSize)
-	var uploadedBytes int64
-
-	for partseq := 0; partseq < chunkCount; partseq++ {
-		if utils.IsCanceled(ctx) {
-			return ctx.Err()
-		}
-
-		currentChunkSize := chunkSize
-		if remaining := streamSize - uploadedBytes; remaining < chunkSize {
-			currentChunkSize = remaining
-		}
-
-		n, err := io.ReadFull(tempFile, buf[:currentChunkSize])
-		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			return err
-		}
-
-		// Calculate MD5 for the chunk
-		h.Reset()
-		h.Write(buf[:n])
-		chunkMD5 := hex.EncodeToString(h.Sum(nil))
-		uploadBlockList = append(uploadBlockList, chunkMD5)
-
-		// Upload chunk with retries
-		var uploadErr error
-		for retry := 0; retry < maxUploadRetries; retry++ {
-			params["partseq"] = strconv.Itoa(partseq)
-			res, err := base.RestyClient.R().
-				SetContext(ctx).
-				SetQueryParams(params).
-				SetFileReader("file", stream.GetName(), bytes.NewReader(buf[:n])).
-				SetHeader("Cookie", d.Cookie).
-				Post("https://" + locateupload_resp.Host + "/rest/2.0/pcs/superfile2")
-			if err == nil && res.StatusCode() == 200 {
-				uploadedBytes += int64(n)
-				up(float64(uploadedBytes) / float64(streamSize) * 100)
-				break
-			}
-			uploadErr = fmt.Errorf("chunk upload failed: %v", err)
-			time.Sleep(retryDelay)
-		}
-
-		if uploadErr != nil {
-			return uploadErr
-		}
-	}
-
-	// Complete the upload
-	params = map[string]string{
-		"isdir": "0",
-		"rtype": "1",
-	}
-
-	uploadBlockListStr, err := utils.Json.MarshalToString(uploadBlockList)
+	// 4. Finalize upload
+	uploadBlockListStr, err := utils.Json.MarshalToString(uploadedMD5s)
 	if err != nil {
 		return err
 	}
+
 	data = map[string]string{
 		"path":        rawPath,
 		"size":        strconv.FormatInt(stream.GetSize(), 10),
@@ -279,32 +211,142 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		"local_mtime": strconv.FormatInt(stream.ModTime().Unix(), 10),
 	}
 	var createResp CreateResp
-	res, err = d.post_form("/api/create", params, data, &createResp)
-	log.Debugln(string(res))
+	_, err = d.post_form("/api/create", map[string]string{"rtype": "1"}, data, &createResp)
 	if err != nil {
 		return err
 	}
 	if createResp.Errno != 0 {
-		return fmt.Errorf("[terabox] failed to create file, errno: %d", createResp.Errno)
+		return fmt.Errorf("finalize failed with errno: %d", createResp.Errno)
 	}
-	time.Sleep(time.Duration(len(precreateResp.BlockList)/16+5) * time.Second)
+
 	return nil
+}
+
+func (d *Terabox) uploadChunksWithWorkers(ctx context.Context, server string, stream model.FileStreamer, uploadID string, chunkSize int64, up driver.UpdateProgress) ([]string, error) {
+	tempFile, err := stream.CacheFullInTempFile()
+	if err != nil {
+		return nil, err
+	}
+	defer tempFile.Close()
+
+	fileSize := stream.GetSize()
+	chunkCount := int(math.Ceil(float64(fileSize) / float64(chunkSize)))
+	md5s := make([]string, chunkCount)
+	completed := 0
+
+	type chunkJob struct {
+		index int
+		start int64
+		size  int64
+	}
+
+	results := make(chan struct {
+		index int
+		md5   string
+		err   error
+	}, chunkCount)
+
+	jobs := make(chan chunkJob, chunkCount)
+
+	// Worker function
+	worker := func() {
+		buf := make([]byte, chunkSize)
+		h := md5.New()
+		for job := range jobs {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				n, err := tempFile.ReadAt(buf[:job.size], job.start)
+				if err != nil {
+					results <- struct {
+						index int
+						md5   string
+						err   error
+					}{job.index, "", err}
+					continue
+				}
+
+				h.Reset()
+				h.Write(buf[:n])
+				chunkMD5 := hex.EncodeToString(h.Sum(nil))
+
+				var uploadErr error
+				for retry := 0; retry < maxUploadRetries; retry++ {
+					params := map[string]string{
+						"method":   "upload",
+						"partseq":  strconv.Itoa(job.index),
+						"uploadid": uploadID,
+					}
+
+					res, err := base.RestyClient.R().
+						SetContext(ctx).
+						SetQueryParams(params).
+						SetFileReader("file", stream.GetName(), bytes.NewReader(buf[:n])).
+						Post(server)
+
+					if err == nil && res.StatusCode() == 200 {
+						results <- struct {
+							index int
+							md5   string
+							err   error
+						}{job.index, chunkMD5, nil}
+						break
+					}
+					uploadErr = err
+					time.Sleep(retryDelay)
+				}
+
+				if uploadErr != nil {
+					results <- struct {
+						index int
+						md5   string
+						err   error
+					}{job.index, "", uploadErr}
+				}
+			}
+		}
+	}
+
+	// Start workers
+	for w := 0; w < d.UploadThreads; w++ {
+		go worker()
+	}
+
+	// Distribute jobs
+	go func() {
+		defer close(jobs)
+		for i := 0; i < chunkCount; i++ {
+			start := int64(i) * chunkSize
+			size := min(chunkSize, fileSize-start)
+			jobs <- chunkJob{
+				index: i,
+				start: start,
+				size:  size,
+			}
+		}
+	}()
+
+	// Collect results
+	for i := 0; i < chunkCount; i++ {
+		result := <-results
+		if result.err != nil {
+			return nil, fmt.Errorf("chunk %d upload failed: %w", result.index, result.err)
+		}
+		md5s[result.index] = result.md5
+		completed++
+		up(float64(completed) / float64(chunkCount) * 100)
+	}
+
+	return md5s, nil
 }
 
 func calculateOptimalChunkSize(fileSize int64) int64 {
 	chunkSize := minChunkSize
-
-	// Scale up chunk size for larger files
 	for fileSize > chunkSize*10 && chunkSize < maxChunkSize {
 		chunkSize *= 2
 	}
-
-	// Don't exceed max chunk size
-	if chunkSize > maxChunkSize {
-		chunkSize = maxChunkSize
-	}
-
-	return chunkSize
+	return min(chunkSize, maxChunkSize)
 }
 
 var _ driver.Driver = (*Terabox)(nil)
