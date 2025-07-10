@@ -84,6 +84,11 @@ func (d *Terabox) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 }
 
 func (d *Terabox) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
+	// Ensure jsToken is available for directory creation
+	if err := d.ensureJsToken(); err != nil {
+		return fmt.Errorf("failed to get jsToken for mkdir: %v", err)
+	}
+	
 	params := map[string]string{
 		"a": "commit",
 	}
@@ -98,6 +103,11 @@ func (d *Terabox) MakeDir(ctx context.Context, parentDir model.Obj, dirName stri
 }
 
 func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
+	// Ensure jsToken is available for move operation
+	if err := d.ensureJsToken(); err != nil {
+		return fmt.Errorf("failed to get jsToken for move: %v", err)
+	}
+	
 	data := []base.Json{
 		{
 			"path":    srcObj.GetPath(),
@@ -110,6 +120,11 @@ func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 }
 
 func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
+	// Ensure jsToken is available for rename operation
+	if err := d.ensureJsToken(); err != nil {
+		return fmt.Errorf("failed to get jsToken for rename: %v", err)
+	}
+	
 	data := []base.Json{
 		{
 			"path":    srcObj.GetPath(),
@@ -121,6 +136,11 @@ func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) 
 }
 
 func (d *Terabox) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
+	// Ensure jsToken is available for copy operation
+	if err := d.ensureJsToken(); err != nil {
+		return fmt.Errorf("failed to get jsToken for copy: %v", err)
+	}
+	
 	data := []base.Json{
 		{
 			"path":    srcObj.GetPath(),
@@ -133,6 +153,11 @@ func (d *Terabox) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 }
 
 func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
+	// Ensure jsToken is available for delete operation
+	if err := d.ensureJsToken(); err != nil {
+		return fmt.Errorf("failed to get jsToken for remove: %v", err)
+	}
+	
 	data := []string{obj.GetPath()}
 	_, err := d.manage("delete", data)
 	return err
@@ -140,11 +165,8 @@ func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
 	// Ensure jsToken is available before upload
-	if d.JsToken == "" {
-		err := d.resetJsToken()
-		if err != nil {
-			return fmt.Errorf("failed to get jsToken for upload: %v", err)
-		}
+	if err := d.ensureJsToken(); err != nil {
+		return fmt.Errorf("failed to get jsToken for upload: %v", err)
 	}
 	
 	resp, err := base.RestyClient.R().
