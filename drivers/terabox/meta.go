@@ -9,6 +9,7 @@ type Addition struct {
 	driver.RootPath
 	Cookie string `json:"cookie" required:"true"`
 	//JsToken        string `json:"js_token" type:"string" required:"true"`
+	UploadThreads  int `json:"upload_threads" type:"number" default:"2" required:"true"` // New setting
 	UserAgent      string `json:"user_agent" required:"true" default:"terabox;1.40.0.132;PC;PC-Windows;10.0.26100;Windows TeraBox"`
 	DownloadAPI    string `json:"download_api" type:"select" options:"official,crack" default:"official"`
 	OrderBy        string `json:"order_by" type:"select" options:"name,time,size" default:"name"`
