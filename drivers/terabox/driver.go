@@ -80,8 +80,8 @@ func (d *Terabox) Init(ctx context.Context) error {
 		return fmt.Errorf("failed to check login status according to cookie")
 	}
 	
-	// Initialize JSToken on startup
-	if err := d.getJsToken(ctx); err != nil {
+	// Initialize JSToken on startup using the util.go method
+	if err := d.resetJsToken(); err != nil {
 		log.Warnf("Failed to initialize JSToken: %v", err)
 		// Don't return error as JSToken might not be needed for all operations
 	}
@@ -132,7 +132,7 @@ func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 			"newname": srcObj.GetName(),
 		},
 	}
-	_, err := d.manage(ctx, "move", data)
+	_, err := d.manageCompat(ctx, "move", data)
 	return err
 }
 
@@ -143,7 +143,7 @@ func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) 
 			"newname": newName,
 		},
 	}
-	_, err := d.manage(ctx, "rename", data)
+	_, err := d.manageCompat(ctx, "rename", data)
 	return err
 }
 
@@ -155,160 +155,33 @@ func (d *Terabox) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 			"newname": srcObj.GetName(),
 		},
 	}
-	_, err := d.manage(ctx, "copy", data)
+	_, err := d.manageCompat(ctx, "copy", data)
 	return err
 }
 
 func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 	data := []string{obj.GetPath()}
-	_, err := d.manage(ctx, "delete", data)
+	_, err := d.manageCompat(ctx, "delete", data)
 	return err
 }
 
-// getJsToken retrieves the JSToken from the main page
-func (d *Terabox) getJsToken(ctx context.Context) error {
-	d.jsTokenMutex.Lock()
-	defer d.jsTokenMutex.Unlock()
-	
-	// Make a GET request to the main page
-	req := base.RestyClient.R().
-		SetContext(ctx).
-		SetHeaders(map[string]string{
-			"Cookie":     d.Cookie,
-			"User-Agent": base.UserAgent,
-			"Referer":    d.base_url,
-		})
-	
-	resp, err := req.Get(d.base_url)
+// manageCompat handles file operations with compatibility for both driver.go and util.go approaches
+func (d *Terabox) manageCompat(ctx context.Context, operation string, data interface{}) ([]byte, error) {
+	// Try the util.go approach first (simpler and more direct)
+	result, err := d.manage(operation, data)
 	if err != nil {
-		return fmt.Errorf("failed to get main page: %v", err)
-	}
-	
-	if resp.StatusCode() != 200 {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-	}
-	
-	body := resp.String()
-	
-	// Extract JSToken using the pattern from rclone implementation
-	jsToken := getStrBetween(body, "`function%20fn%28a%29%7Bwindow.jsToken%20%3D%20a%7D%3Bfn%28%22", "%22%29`")
-	if jsToken == "" {
-		// Try alternative patterns that might be used
-		patterns := []string{
-			`window\.jsToken\s*=\s*"([^"]+)"`,
-			`jsToken\s*=\s*"([^"]+)"`,
-			`fn\("([^"]+)"\)`,
-		}
-		
-		for _, pattern := range patterns {
-			re := regexp.MustCompile(pattern)
-			matches := re.FindStringSubmatch(body)
-			if len(matches) > 1 {
-				jsToken = matches[1]
-				break
+		// Check if it's a JSToken-related error
+		if strings.Contains(err.Error(), "4000023") {
+			log.Debugf("JSToken error detected, refreshing token")
+			if tokenErr := d.resetJsToken(); tokenErr != nil {
+				log.Warnf("Failed to refresh JSToken: %v", tokenErr)
+				return nil, fmt.Errorf("failed to refresh JSToken: %v", tokenErr)
 			}
+			// Retry the operation
+			result, err = d.manage(operation, data)
 		}
 	}
-	
-	if jsToken == "" {
-		return fmt.Errorf("jsToken not found in response")
-	}
-	
-	d.JsToken = jsToken
-	log.Debugf("JSToken retrieved: %s", jsToken)
-	return nil
-}
-
-// getStrBetween extracts string between two delimiters
-func getStrBetween(str, start, end string) string {
-	startIdx := strings.Index(str, start)
-	if startIdx == -1 {
-		return ""
-	}
-	startIdx += len(start)
-	
-	endIdx := strings.Index(str[startIdx:], end)
-	if endIdx == -1 {
-		return ""
-	}
-	
-	return str[startIdx : startIdx+endIdx]
-}
-
-// ensureJsToken ensures JSToken is available, fetching it if necessary
-func (d *Terabox) ensureJsToken(ctx context.Context) error {
-	d.jsTokenMutex.RLock()
-	hasToken := d.JsToken != ""
-	d.jsTokenMutex.RUnlock()
-	
-	if !hasToken {
-		return d.getJsToken(ctx)
-	}
-	return nil
-}
-
-// manage handles file operations with JSToken support
-func (d *Terabox) manage(ctx context.Context, operation string, data interface{}) ([]byte, error) {
-	// Ensure JSToken is available
-	if err := d.ensureJsToken(ctx); err != nil {
-		return nil, fmt.Errorf("failed to get JSToken: %v", err)
-	}
-	
-	maxRetries := 3
-	for retry := 0; retry < maxRetries; retry++ {
-		result, err := d.performManageOperation(ctx, operation, data)
-		if err != nil {
-			// Check if it's a JSToken-related error
-			if strings.Contains(err.Error(), "jsToken") || 
-			   strings.Contains(err.Error(), "4000023") ||
-			   strings.Contains(err.Error(), "450016") {
-				log.Debugf("JSToken error detected, refreshing token (retry %d/%d)", retry+1, maxRetries)
-				if tokenErr := d.getJsToken(ctx); tokenErr != nil {
-					log.Warnf("Failed to refresh JSToken: %v", tokenErr)
-				}
-				continue
-			}
-			return nil, err
-		}
-		return result, nil
-	}
-	
-	return nil, fmt.Errorf("operation failed after %d retries", maxRetries)
-}
-
-// performManageOperation performs the actual file operation
-func (d *Terabox) performManageOperation(ctx context.Context, operation string, data interface{}) ([]byte, error) {
-	params := map[string]string{
-		"opera":  operation,
-		"async":  "1",
-		"onnest": "fail",
-	}
-	
-	// Add JSToken to parameters
-	d.jsTokenMutex.RLock()
-	if d.JsToken != "" {
-		params["jsToken"] = d.JsToken
-	}
-	d.jsTokenMutex.RUnlock()
-	
-	// Convert data to JSON string
-	var jsonData []byte
-	var err error
-	if operation == "delete" {
-		jsonData, err = utils.Json.Marshal(data)
-	} else {
-		jsonData, err = utils.Json.Marshal(data)
-	}
-	if err != nil {
-		return nil, err
-	}
-	
-	// Prepare form data
-	formData := map[string]string{
-		"filelist": string(jsonData),
-	}
-	
-	return d.post_form("/api/filemanager", params, formData, nil)
+	return result, err
 }
 
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
@@ -339,7 +212,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 
 	var precreateBlockListStr string
 	if stream.GetSize() > minChunkSize {
-		precreateBlockListStr = `["5910a591dd8fc18c32a8f3df4fdc1761","a5fc157d78e6ad1c7e114b056c92821e"]`
+		precreateBlockListStr = `["5910a591dd8fc18c32a8f3df4fdc1761","a5fzc157d78e6ad1c7e114b056c92821e"]`
 	} else {
 		precreateBlockListStr = `["5910a591dd8fc18c32a8f3df4fdc1761"]`
 	}
@@ -351,6 +224,10 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		"block_list":            precreateBlockListStr,
 		"size":                  strconv.FormatInt(stream.GetSize(), 10),
 		"local_mtime":           strconv.FormatInt(stream.ModTime().Unix(), 10),
+		"web":                   "1",
+		"channel":               "dubox",
+		"app_id":                "250228",
+		"clienttype":            "0",
 		"file_limit_switch_v34": "true",
 	}
 	var precreateResp PrecreateResp
@@ -486,7 +363,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		"uploadid":    precreateResp.Uploadid,
 		"target_path": dstDir.GetPath(),
 		"block_list":  uploadBlockListStr,
-		"local_mtime": strconv.FormatInt(stream.ModTime().Unix(), 10),
+		"local_mtime": strconv.FormatInt(stream.ModTime().Unix(), 2),
 	}
 	var createResp CreateResp
 	res, err = d.post_form("/api/create", params, data, &createResp)
@@ -596,4 +473,4 @@ func calculateOptimalChunkSize(fileSize int64) int64 {
 	return chunkSize
 }
 
-var _ driver.Driver = (*Terabox)(nil)
+var _ driver.Driver = (*Terabox)()
