@@ -22,7 +22,17 @@ const (
 	initialSizeThreshold int64 = 4 << 30 // 4GB
 	maxRetries           int   = 3       // Maximum retry attempts for chunk uploads
 	retryBackoffBase     time.Duration = 2 * time.Second // Base backoff duration for retries
+	maxAPIRetries        int   = 3       // Maximum API request retries
 )
+
+var retryErrorCodes = []int{
+	429, // Too Many Requests
+	500, // Internal Server Error
+	502, // Bad Gateway
+	503, // Service Unavailable
+	504, // Gateway Timeout
+	509, // Bandwidth Limit Exceeded
+}
 
 func getStrBetween(raw, start, end string) string {
 	regexPattern := fmt.Sprintf(`%s(.*?)%s`, regexp.QuoteMeta(start), regexp.QuoteMeta(end))
@@ -53,10 +63,28 @@ func (d *Terabox) resetJsToken() error {
 		return fmt.Errorf("jsToken not found, html: %s", html)
 	}
 	d.JsToken = jsToken
+	log.Debugf("jsToken refreshed: %s", jsToken)
 	return nil
 }
 
+func isRetryableError(statusCode int) bool {
+	for _, code := range retryErrorCodes {
+		if statusCode == code {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Terabox) request(rurl string, method string, callback base.ReqCallback, resp interface{}, noRetry ...bool) ([]byte, error) {
+	retry := 0
+	var jsTokenRefreshed bool
+
+retryLoop:
+	if retry >= maxAPIRetries {
+		return nil, fmt.Errorf("max retries exceeded for %s %s", method, rurl)
+	}
+
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
 		"Cookie":           d.Cookie,
@@ -65,45 +93,85 @@ func (d *Terabox) request(rurl string, method string, callback base.ReqCallback,
 		"User-Agent":       base.UserAgent,
 		"X-Requested-With": "XMLHttpRequest",
 	})
-	req.SetQueryParams(map[string]string{
+	
+	// Always include jsToken in query params if we have it
+	queryParams := map[string]string{
 		"app_id":     "250528",
 		"web":        "1",
 		"channel":    "dubox",
 		"clienttype": "0",
-		"jsToken":    d.JsToken,
-	})
+	}
+	
+	if d.JsToken != "" {
+		queryParams["jsToken"] = d.JsToken
+	}
+	
+	req.SetQueryParams(queryParams)
+	
 	if callback != nil {
 		callback(req)
 	}
 	if resp != nil {
 		req.SetResult(resp)
 	}
+	
 	res, err := req.Execute(method, d.base_url+rurl)
 	if err != nil {
+		// Check if it's a retryable HTTP error
+		if res != nil && isRetryableError(res.StatusCode()) {
+			retry++
+			log.Warnf("Retryable HTTP error %d for %s %s, attempt %d/%d", 
+				res.StatusCode(), method, rurl, retry, maxAPIRetries)
+			time.Sleep(time.Duration(retry) * time.Second)
+			goto retryLoop
+		}
 		return nil, err
 	}
-	errno := utils.Json.Get(res.Body(), "errno").ToInt()
-	if errno == 4000023 {
-		// reget jsToken
-		err = d.resetJsToken()
-		if err != nil {
-			return nil, err
+	
+	body := res.Body()
+	errno := utils.Json.Get(body, "errno").ToInt()
+	
+	// Handle specific error codes
+	switch errno {
+	case 4000023, 450016: // jsToken related errors
+		if !jsTokenRefreshed && !utils.IsBool(noRetry...) {
+			log.Debugf("jsToken error (errno: %d), refreshing token", errno)
+			err = d.resetJsToken()
+			if err != nil {
+				return nil, fmt.Errorf("failed to refresh jsToken: %v", err)
+			}
+			jsTokenRefreshed = true
+			retry++
+			goto retryLoop
 		}
-		if !utils.IsBool(noRetry...) {
-			return d.request(rurl, method, callback, resp, true)
-		}
-	} else if errno == -6 {
+		return body, fmt.Errorf("jsToken error after refresh, errno: %d", errno)
+		
+	case -6: // Domain redirect
 		header := res.Header()
-		log.Debugln(header)
+		log.Debugln("Redirect headers:", header)
 		urlDomainPrefix := header.Get("Url-Domain-Prefix")
 		if len(urlDomainPrefix) > 0 {
+			oldBaseURL := d.base_url
 			d.url_domain_prefix = urlDomainPrefix
 			d.base_url = "https://" + d.url_domain_prefix + ".terabox.com"
-			log.Debugln("Redirect base_url to", d.base_url)
-			return d.request(rurl, method, callback, resp, noRetry...)
+			log.Debugf("Base URL redirected from %s to %s", oldBaseURL, d.base_url)
+			retry++
+			goto retryLoop
+		}
+		return body, fmt.Errorf("domain redirect error without prefix, errno: %d", errno)
+		
+	case 9000:
+		return body, fmt.Errorf("terabox is not yet available in this area")
+		
+	default:
+		// For other non-zero errno values, check if it's a general error
+		if errno != 0 {
+			log.Debugf("API error with errno: %d, response: %s", errno, string(body))
+			return body, fmt.Errorf("API error, errno: %d", errno)
 		}
 	}
-	return res.Body(), nil
+	
+	return body, nil
 }
 
 func (d *Terabox) get(pathname string, params map[string]string, resp interface{}) ([]byte, error) {
