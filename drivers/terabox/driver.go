@@ -9,7 +9,6 @@ import (
 	"io"
 	"math"
 	"net/url"
-	"regexp"
 	stdpath "path"
 	"strconv"
 	"strings"
