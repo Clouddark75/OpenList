@@ -10,6 +10,7 @@ import (
 	"math"
 	stdpath "path"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -180,7 +181,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		return nil
 	}
 
-	// upload chunks
+	// upload chunks with threading
 	tempFile, err := stream.CacheFullInTempFile()
 	if err != nil {
 		return err
@@ -198,49 +199,42 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	}
 
 	chunkSize := calculateChunkSize(streamSize)
-	chunkByteData := make([]byte, chunkSize)
 	count := int(math.Ceil(float64(streamSize) / float64(chunkSize)))
+	
+	// Get upload threads setting with default value of 2
+	uploadThreads := d.UploadThreads
+	if uploadThreads <= 0 {
+		uploadThreads = 2
+	}
+	// Limit max threads to prevent overwhelming the server
+	if uploadThreads > 10 {
+		uploadThreads = 10
+	}
+	
+	log.Infof("Starting threaded upload with %d threads for %d chunks", uploadThreads, count)
+
+	// Prepare chunks info
+	chunks := make([]ChunkInfo, count)
 	left := streamSize
-	uploadBlockList := make([]string, 0, count)
-	h := md5.New()
-	for partseq := 0; partseq < count; partseq++ {
-		if utils.IsCanceled(ctx) {
-			return ctx.Err()
-		}
+	for i := 0; i < count; i++ {
 		byteSize := chunkSize
-		var byteData []byte
-		if left >= chunkSize {
-			byteData = chunkByteData
-		} else {
+		if left < chunkSize {
 			byteSize = left
-			byteData = make([]byte, byteSize)
+		}
+		chunks[i] = ChunkInfo{
+			Index:  i,
+			Offset: int64(i) * chunkSize,
+			Size:   byteSize,
 		}
 		left -= byteSize
-		_, err = io.ReadFull(tempFile, byteData)
-		if err != nil {
-			return err
-		}
+	}
 
-		// calculate md5
-		h.Write(byteData)
-		uploadBlockList = append(uploadBlockList, hex.EncodeToString(h.Sum(nil)))
-		h.Reset()
-
-		u := "https://" + locateupload_resp.Host + "/rest/2.0/pcs/superfile2"
-		params["partseq"] = strconv.Itoa(partseq)
-		res, err := base.RestyClient.R().
-			SetContext(ctx).
-			SetQueryParams(params).
-			SetFileReader("file", stream.GetName(), bytes.NewReader(byteData)).
-			SetHeader("Cookie", d.Cookie).
-			Post(u)
-		if err != nil {
-			return err
-		}
-		log.Debugln(res.String())
-		if count > 0 {
-			up(float64(partseq) * 100 / float64(count))
-		}
+	// Upload chunks with threading and retry
+	uploadBlockList := make([]string, count)
+	err = d.uploadChunksThreaded(ctx, tempFile, chunks, uploadBlockList, locateupload_resp.Host, 
+		params, stream.GetName(), uploadThreads, up)
+	if err != nil {
+		return err
 	}
 
 	// create file
@@ -271,6 +265,138 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		return fmt.Errorf("[terabox] failed to create file, errno: %d", createResp.Errno)
 	}
 	time.Sleep(time.Duration(len(precreateResp.BlockList)/16+5) * time.Second)
+	return nil
+}
+
+func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt, chunks []ChunkInfo, 
+	uploadBlockList []string, host string, params map[string]string, fileName string, 
+	uploadThreads int, up driver.UpdateProgress) error {
+	
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var uploadErr error
+	
+	// Channel to limit concurrent uploads
+	semaphore := make(chan struct{}, uploadThreads)
+	
+	// Progress tracking
+	completedChunks := 0
+	totalChunks := len(chunks)
+	
+	for i := range chunks {
+		if utils.IsCanceled(ctx) {
+			return ctx.Err()
+		}
+		
+		wg.Add(1)
+		go func(chunkIndex int) {
+			defer wg.Done()
+			
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			
+			chunk := chunks[chunkIndex]
+			
+			// Retry logic for chunk upload
+			var chunkErr error
+			for retryCount := 0; retryCount < maxRetries; retryCount++ {
+				if utils.IsCanceled(ctx) {
+					return
+				}
+				
+				chunkErr = d.uploadSingleChunk(ctx, tempFile, chunk, host, params, fileName, 
+					func(md5Hash string) {
+						mu.Lock()
+						uploadBlockList[chunkIndex] = md5Hash
+						completedChunks++
+						progress := float64(completedChunks) * 100.0 / float64(totalChunks)
+						mu.Unlock()
+						
+						if up != nil {
+							up(progress)
+						}
+					})
+				
+				if chunkErr == nil {
+					break
+				}
+				
+				log.Warnf("Chunk %d upload failed (attempt %d/%d): %v", 
+					chunkIndex, retryCount+1, maxRetries, chunkErr)
+				
+				if retryCount < maxRetries-1 {
+					// Exponential backoff
+					backoffDuration := time.Duration(retryCount+1) * retryBackoffBase
+					time.Sleep(backoffDuration)
+				}
+			}
+			
+			if chunkErr != nil {
+				mu.Lock()
+				if uploadErr == nil {
+					uploadErr = fmt.Errorf("chunk %d upload failed after %d retries: %v", 
+						chunkIndex, maxRetries, chunkErr)
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	return uploadErr
+}
+
+func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, chunk ChunkInfo, 
+	host string, params map[string]string, fileName string, onSuccess func(string)) error {
+	
+	// Read chunk data
+	chunkData := make([]byte, chunk.Size)
+	_, err := tempFile.ReadAt(chunkData, chunk.Offset)
+	if err != nil {
+		return fmt.Errorf("failed to read chunk data: %v", err)
+	}
+	
+	// Calculate MD5 hash
+	h := md5.New()
+	h.Write(chunkData)
+	md5Hash := hex.EncodeToString(h.Sum(nil))
+	
+	// Upload chunk
+	u := "https://" + host + "/rest/2.0/pcs/superfile2"
+	uploadParams := make(map[string]string)
+	for k, v := range params {
+		uploadParams[k] = v
+	}
+	uploadParams["partseq"] = strconv.Itoa(chunk.Index)
+	
+	res, err := base.RestyClient.R().
+		SetContext(ctx).
+		SetQueryParams(uploadParams).
+		SetFileReader("file", fileName, bytes.NewReader(chunkData)).
+		SetHeader("Cookie", d.Cookie).
+		SetTimeout(30 * time.Second). // Add timeout for chunk uploads
+		Post(u)
+	
+	if err != nil {
+		return fmt.Errorf("HTTP request failed: %v", err)
+	}
+	
+	if res.StatusCode() != 200 {
+		return fmt.Errorf("HTTP status %d: %s", res.StatusCode(), res.String())
+	}
+	
+	// Check response for errors
+	responseBody := res.String()
+	if responseBody != "" {
+		errno := utils.Json.Get([]byte(responseBody), "errno").ToInt()
+		if errno != 0 {
+			return fmt.Errorf("upload error, errno: %d, response: %s", errno, responseBody)
+		}
+	}
+	
+	log.Debugf("Chunk %d uploaded successfully (size: %d bytes)", chunk.Index, chunk.Size)
+	onSuccess(md5Hash)
 	return nil
 }
 
