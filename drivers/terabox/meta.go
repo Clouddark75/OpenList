@@ -15,26 +15,11 @@ type Addition struct {
 	OrderDirection string `json:"order_direction" type:"select" options:"asc,desc" default:"asc" help:"Default sorting direction"`
 	UploadThreads  int    `json:"upload_threads" type:"number" default:"2" help:"Number of parallel threads for uploads (1-10, default: 2)"`
 	RetryCount     int    `json:"retry_count" type:"number" default:"3" help:"Number of retry attempts for failed operations (1-10, default: 3)"`
-	Timeout        int    `json:"timeout" type:"number" default:"30" help:"Request timeout in seconds (default: 30)"`
 }
 
 var config = driver.Config{
 	Name:              "Terabox",
 	DefaultRoot:       "/",
-	CheckStatus:       false,
-	Alert:             "",
-	NoCache:           false,
-	NoUpload:          false,
-	NoCopy:            false,
-	NoMove:            false,
-	NoRename:          false,
-	NoMkdir:           false,
-	NoRemove:          false,
-	NoLink:            false,
-	MustProxy:         false,
-	OnlyLocal:         false,
-	OnlyProxy:         false,
-	NoOverwriteUpload: false,
 }
 
 func init() {
