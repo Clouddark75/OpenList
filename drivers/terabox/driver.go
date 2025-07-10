@@ -29,8 +29,8 @@ const (
 	maxChunkSize    int64 = 128 << 20 // 128MB maximum chunk size
 	sizeThreshold   int64 = 4 << 30   // 4GB threshold for larger chunks
 	maxUploadRetries      = 3
-	retryDelay           = 5 * time.Second
-	defaultUploadThreads  = 3         // Default number of upload threads
+	retryDelay            = 5 * time.Second
+	defaultUploadThreads  = 2         // Default number of upload threads
 )
 
 type Terabox struct {
