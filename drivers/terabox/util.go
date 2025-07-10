@@ -20,6 +20,8 @@ import (
 const (
 	initialChunkSize     int64 = 4 << 20 // 4MB
 	initialSizeThreshold int64 = 4 << 30 // 4GB
+	maxRetries           int   = 3       // Maximum retry attempts for chunk uploads
+	retryBackoffBase     time.Duration = 2 * time.Second // Base backoff duration for retries
 )
 
 func getStrBetween(raw, start, end string) string {
