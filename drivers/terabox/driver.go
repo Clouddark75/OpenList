@@ -25,12 +25,13 @@ import (
 )
 
 const (
-	minChunkSize    int64 = 4 << 20   // 4MB minimum chunk size
-	maxChunkSize    int64 = 128 << 20 // 128MB maximum chunk size
-	sizeThreshold   int64 = 4 << 30   // 4GB threshold for larger chunks
-	maxUploadRetries      = 3
-	retryDelay            = 5 * time.Second
-	defaultUploadThreads  = 2         // Default number of upload threads
+	minChunkSize         int64 = 4 << 20   // 4MB minimum chunk size
+	maxChunkSize         int64 = 128 << 20 // 128MB maximum chunk size
+	sizeThreshold        int64 = 4 << 30   // 4GB threshold for larger chunks
+	maxUploadRetries           = 3
+	retryDelay                 = 5 * time.Second
+	defaultUploadThreads       = 2 // Default number of upload threads
+	maxConcurrentChunks        = 3 // Maximum chunks to keep in memory
 )
 
 type Terabox struct {
@@ -42,12 +43,12 @@ type Terabox struct {
 	jsTokenMutex      sync.RWMutex
 }
 
-// ChunkJob represents a chunk upload job
+// ChunkJob represents a chunk upload job with metadata only
 type ChunkJob struct {
-	partseq     int
-	data        []byte
-	chunkMD5    string
-	chunkSize   int64
+	partseq   int
+	offset    int64
+	size      int64
+	chunkMD5  string
 }
 
 // ChunkResult represents the result of a chunk upload
@@ -55,6 +56,33 @@ type ChunkResult struct {
 	partseq int
 	md5     string
 	err     error
+}
+
+// StreamReader provides thread-safe reading from a file stream
+type StreamReader struct {
+	stream model.FileStreamer
+	mutex  sync.Mutex
+}
+
+func NewStreamReader(stream model.FileStreamer) *StreamReader {
+	return &StreamReader{stream: stream}
+}
+
+func (sr *StreamReader) ReadAt(p []byte, offset int64) (int, error) {
+	sr.mutex.Lock()
+	defer sr.mutex.Unlock()
+	
+	// Seek to the offset
+	if seeker, ok := sr.stream.(io.Seeker); ok {
+		_, err := seeker.Seek(offset, io.SeekStart)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		return 0, fmt.Errorf("stream does not support seeking")
+	}
+	
+	return io.ReadFull(sr.stream, p)
 }
 
 func (d *Terabox) Config() driver.Config {
@@ -366,12 +394,14 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		return nil
 	}
 
-	// Upload chunks with threading
-	tempFile, err := stream.CacheFullInTempFile()
-	if err != nil {
-		return err
-	}
+	// Use streaming upload instead of caching full file
+	return d.uploadChunksStreaming(ctx, stream, uploadHost, path, chunkSize, chunkCount, precreateResp, up)
+}
 
+// uploadChunksStreaming handles streaming upload without caching the entire file
+func (d *Terabox) uploadChunksStreaming(ctx context.Context, stream model.FileStreamer, uploadHost, path string, chunkSize int64, chunkCount int, precreateResp PrecreateResp, up driver.UpdateProgress) error {
+	streamSize := stream.GetSize()
+	
 	// Determine number of upload threads
 	uploadThreads := d.getUploadThreads()
 	if uploadThreads > chunkCount {
@@ -389,57 +419,48 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		"uploadsign": "0",
 	}
 
-	// Create jobs channel and results channel
-	jobs := make(chan ChunkJob, chunkCount)
+	// Create jobs channel with limited buffer to prevent memory buildup
+	jobs := make(chan ChunkJob, maxConcurrentChunks)
 	results := make(chan ChunkResult, chunkCount)
+
+	// Create thread-safe stream reader
+	streamReader := NewStreamReader(stream)
 
 	// Start worker goroutines
 	var wg sync.WaitGroup
 	for i := 0; i < uploadThreads; i++ {
 		wg.Add(1)
-		go d.uploadWorker(ctx, &wg, jobs, results, params, uploadHost, stream.GetName(), precreateResp.Uploadid)
+		go d.uploadWorkerStreaming(ctx, &wg, jobs, results, params, uploadHost, stream.GetName(), precreateResp.Uploadid, streamReader)
 	}
 
-	// Prepare chunks and send to jobs channel
+	// Prepare chunk metadata and send to jobs channel
 	go func() {
 		defer close(jobs)
-		h := md5.New()
-		buf := make([]byte, chunkSize)
-		var readBytes int64
-
+		
 		for partseq := 0; partseq < chunkCount; partseq++ {
 			if utils.IsCanceled(ctx) {
 				return
 			}
 
+			offset := int64(partseq) * chunkSize
 			currentChunkSize := chunkSize
-			if remaining := streamSize - readBytes; remaining < chunkSize {
+			if remaining := streamSize - offset; remaining < chunkSize {
 				currentChunkSize = remaining
 			}
 
-			n, err := io.ReadFull(tempFile, buf[:currentChunkSize])
-			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-				log.Errorf("Failed to read chunk %d: %v", partseq, err)
+			// Pre-calculate MD5 for this chunk
+			chunkMD5, err := d.calculateChunkMD5(streamReader, offset, currentChunkSize)
+			if err != nil {
+				log.Errorf("Failed to calculate MD5 for chunk %d: %v", partseq, err)
 				return
 			}
 
-			// Calculate MD5 for the chunk
-			h.Reset()
-			h.Write(buf[:n])
-			chunkMD5 := hex.EncodeToString(h.Sum(nil))
-
-			// Create a copy of the data for this chunk
-			chunkData := make([]byte, n)
-			copy(chunkData, buf[:n])
-
 			jobs <- ChunkJob{
-				partseq:   partseq,
-				data:      chunkData,
-				chunkMD5:  chunkMD5,
-				chunkSize: int64(n),
+				partseq:  partseq,
+				offset:   offset,
+				size:     currentChunkSize,
+				chunkMD5: chunkMD5,
 			}
-
-			readBytes += int64(n)
 		}
 	}()
 
@@ -469,38 +490,11 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	}
 
 	// Complete the upload
-	params = map[string]string{
-		"isdir": "0",
-		"rtype": "1",
-	}
-
-	uploadBlockListStr, err := utils.Json.MarshalToString(uploadBlockList)
-	if err != nil {
-		return err
-	}
-	data = map[string]string{
-		"path":        rawPath,
-		"size":        strconv.FormatInt(stream.GetSize(), 10),
-		"uploadid":    precreateResp.Uploadid,
-		"target_path": dstDir.GetPath(),
-		"block_list":  uploadBlockListStr,
-		"local_mtime": strconv.FormatInt(stream.ModTime().Unix(), 10),
-	}
-	var createResp CreateResp
-	res, err = d.post_form("/api/create", params, data, &createResp)
-	log.Debugln(string(res))
-	if err != nil {
-		return err
-	}
-	if createResp.Errno != 0 {
-		return fmt.Errorf("[terabox] failed to create file, errno: %d", createResp.Errno)
-	}
-	time.Sleep(time.Duration(len(precreateResp.BlockList)/16+5) * time.Second)
-	return nil
+	return d.completeUpload(ctx, stream, precreateResp, uploadBlockList)
 }
 
-// uploadWorker handles uploading chunks concurrently
-func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan ChunkJob, results chan<- ChunkResult, baseParams map[string]string, host, fileName, uploadID string) {
+// uploadWorkerStreaming handles uploading chunks with streaming reads
+func (d *Terabox) uploadWorkerStreaming(ctx context.Context, wg *sync.WaitGroup, jobs <-chan ChunkJob, results chan<- ChunkResult, baseParams map[string]string, host, fileName, uploadID string, streamReader *StreamReader) {
 	defer wg.Done()
 
 	for job := range jobs {
@@ -508,6 +502,17 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 			results <- ChunkResult{partseq: job.partseq, err: ctx.Err()}
 			return
 		}
+
+		// Read chunk data on-demand
+		chunkData := make([]byte, job.size)
+		n, err := streamReader.ReadAt(chunkData, job.offset)
+		if err != nil && err != io.EOF {
+			results <- ChunkResult{partseq: job.partseq, err: fmt.Errorf("failed to read chunk: %v", err)}
+			return
+		}
+		
+		// Truncate to actual read size
+		chunkData = chunkData[:n]
 
 		// Create a copy of params for this worker
 		params := make(map[string]string)
@@ -523,7 +528,7 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 			req := base.RestyClient.R().
 				SetContext(ctx).
 				SetQueryParams(params).
-				SetFileReader("file", fileName, bytes.NewReader(job.data)).
+				SetFileReader("file", fileName, bytes.NewReader(chunkData)).
 				SetHeaders(map[string]string{
 					"Cookie":           d.Cookie,
 					"Accept":           "application/json, text/plain, */*",
@@ -556,7 +561,58 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 			results <- ChunkResult{partseq: job.partseq, err: uploadErr}
 			return
 		}
+		
+		// Explicitly clear chunk data to help GC
+		chunkData = nil
 	}
+}
+
+// calculateChunkMD5 calculates MD5 hash for a chunk without storing the data
+func (d *Terabox) calculateChunkMD5(streamReader *StreamReader, offset, size int64) (string, error) {
+	chunkData := make([]byte, size)
+	n, err := streamReader.ReadAt(chunkData, offset)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	
+	h := md5.New()
+	h.Write(chunkData[:n])
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// completeUpload completes the upload process
+func (d *Terabox) completeUpload(ctx context.Context, stream model.FileStreamer, precreateResp PrecreateResp, uploadBlockList []string) error {
+	params := map[string]string{
+		"isdir": "0",
+		"rtype": "1",
+	}
+
+	uploadBlockListStr, err := utils.Json.MarshalToString(uploadBlockList)
+	if err != nil {
+		return err
+	}
+	
+	data := map[string]string{
+		"path":        stdpath.Join(stream.GetPath(), stream.GetName()),
+		"size":        strconv.FormatInt(stream.GetSize(), 10),
+		"uploadid":    precreateResp.Uploadid,
+		"target_path": stream.GetPath(),
+		"block_list":  uploadBlockListStr,
+		"local_mtime": strconv.FormatInt(stream.ModTime().Unix(), 10),
+	}
+	
+	var createResp CreateResp
+	res, err := d.post_form("/api/create", params, data, &createResp)
+	log.Debugln(string(res))
+	if err != nil {
+		return err
+	}
+	if createResp.Errno != 0 {
+		return fmt.Errorf("[terabox] failed to create file, errno: %d", createResp.Errno)
+	}
+	
+	time.Sleep(time.Duration(len(precreateResp.BlockList)/16+5) * time.Second)
+	return nil
 }
 
 // getUploadThreads returns the number of upload threads to use
