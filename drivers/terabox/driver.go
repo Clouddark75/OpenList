@@ -41,7 +41,15 @@ func (d *Terabox) Init(ctx context.Context) error {
 	var resp CheckLoginResp
 	d.base_url = "https://www.terabox.com"
 	d.url_domain_prefix = "jp"
-	_, err := d.get("/api/check/login", nil, &resp)
+	
+	// Initialize jsToken first
+	err := d.resetJsToken()
+	if err != nil {
+		log.Warnf("Failed to get initial jsToken: %v", err)
+		// Continue without jsToken, it will be refreshed as needed
+	}
+	
+	_, err = d.get("/api/check/login", nil, &resp)
 	if err != nil {
 		return err
 	}
@@ -51,7 +59,7 @@ func (d *Terabox) Init(ctx context.Context) error {
 		}
 		return fmt.Errorf("failed to check login status according to cookie")
 	}
-	return err
+	return nil
 }
 
 func (d *Terabox) Drop(ctx context.Context) error {
@@ -131,6 +139,14 @@ func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 }
 
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+	// Ensure jsToken is available before upload
+	if d.JsToken == "" {
+		err := d.resetJsToken()
+		if err != nil {
+			return fmt.Errorf("failed to get jsToken for upload: %v", err)
+		}
+	}
+	
 	resp, err := base.RestyClient.R().
 		SetContext(ctx).
 		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
