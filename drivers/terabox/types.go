@@ -103,3 +103,60 @@ type LocateUploadResp struct {
 type CreateResp struct {
 	Errno int `json:"errno"`
 }
+
+// ChunkInfo represents information about a chunk to be uploaded
+type ChunkInfo struct {
+	Index  int   // Chunk index (0-based)
+	Offset int64 // Byte offset in the file
+	Size   int64 // Size of this chunk in bytes
+}
+
+// UploadProgress represents the progress of an upload operation
+type UploadProgress struct {
+	CompletedChunks int     // Number of chunks completed
+	TotalChunks     int     // Total number of chunks
+	CompletedBytes  int64   // Total bytes uploaded
+	TotalBytes      int64   // Total file size
+	Percentage      float64 // Upload percentage (0-100)
+}
+
+// ManageResp represents the response from file management operations
+type ManageResp struct {
+	Errno     int    `json:"errno"`
+	Info      []struct {
+		Errno int    `json:"errno"`
+		Path  string `json:"path"`
+	} `json:"info"`
+	TaskId    int64  `json:"task_id"`
+	RequestId string `json:"request_id"`
+}
+
+// ErrorResp represents a standard error response from the API
+type ErrorResp struct {
+	Errno     int    `json:"errno"`
+	ErrMsg    string `json:"errmsg"`
+	RequestId string `json:"request_id"`
+}
+
+// JsTokenResp represents the response containing jsToken information
+type JsTokenResp struct {
+	Errno int    `json:"errno"`
+	Token string `json:"token"`
+}
+
+// QuotaResp represents the response for quota/space information
+type QuotaResp struct {
+	Errno int `json:"errno"`
+	Quota int64 `json:"quota"`
+	Used  int64 `json:"used"`
+}
+
+// UserInfoResp represents user information response
+type UserInfoResp struct {
+	Errno int `json:"errno"`
+	Data  struct {
+		Username string `json:"username"`
+		Avatar   string `json:"avatar"`
+		VipType  int    `json:"vip_type"`
+	} `json:"data"`
+}
