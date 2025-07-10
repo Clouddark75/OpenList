@@ -67,6 +67,14 @@ func (d *Terabox) resetJsToken() error {
 	return nil
 }
 
+// ensureJsToken ensures that we have a valid jsToken before making operations that require it
+func (d *Terabox) ensureJsToken() error {
+	if d.JsToken == "" {
+		return d.resetJsToken()
+	}
+	return nil
+}
+
 func isRetryableError(statusCode int) bool {
 	for _, code := range retryErrorCodes {
 		if statusCode == code {
@@ -319,17 +327,30 @@ func (d *Terabox) linkCrack(file model.Obj, args model.LinkArgs) (*model.Link, e
 	}, nil
 }
 
+// Updated manage function to ensure jsToken is available
 func (d *Terabox) manage(opera string, filelist interface{}) ([]byte, error) {
+	// Ensure jsToken is available before making management operations
+	if err := d.ensureJsToken(); err != nil {
+		return nil, fmt.Errorf("failed to get jsToken for operation %s: %v", opera, err)
+	}
+	
 	params := map[string]string{
 		"onnest": "fail",
 		"opera":  opera,
+		"async":  "0", // Following rclone's approach for synchronous operations
 	}
 	marshal, err := utils.Json.Marshal(filelist)
 	if err != nil {
 		return nil, err
 	}
 	data := fmt.Sprintf("async=0&filelist=%s&ondup=newcopy", encodeURIComponent(string(marshal)))
-	return d.post("/api/filemanager", params, data, nil)
+	
+	// Use POST request with body data (following rclone's approach)
+	return d.request("/api/filemanager", http.MethodPost, func(req *resty.Request) {
+		req.SetQueryParams(params)
+		req.SetBody(data)
+		req.SetHeader("Content-Type", "application/x-www-form-urlencoded")
+	}, nil)
 }
 
 func encodeURIComponent(str string) string {
