@@ -408,12 +408,15 @@ func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, c
 	}
 	uploadParams["partseq"] = strconv.Itoa(chunk.Index)
 	
+	// Create a context with timeout instead of using SetTimeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	
 	res, err := base.RestyClient.R().
-		SetContext(ctx).
+		SetContext(timeoutCtx).
 		SetQueryParams(uploadParams).
 		SetFileReader("file", fileName, bytes.NewReader(chunkData)).
 		SetHeader("Cookie", d.Cookie).
-		SetTimeout(30 * time.Second). // Add timeout for chunk uploads
 		Post(u)
 	
 	if err != nil {
