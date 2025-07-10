@@ -9,8 +9,10 @@ import (
 	"io"
 	"math"
 	"net/url"
+	"regexp"
 	stdpath "path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,9 +31,6 @@ const (
 	maxUploadRetries      = 3
 	retryDelay           = 5 * time.Second
 	defaultUploadThreads  = 3         // Default number of upload threads
-	
-	// JS token related constants
-	jsTokenRefreshRetries = 2
 )
 
 type Terabox struct {
@@ -40,7 +39,7 @@ type Terabox struct {
 	JsToken           string
 	url_domain_prefix string
 	base_url          string
-	tokenMutex        sync.RWMutex // Protects JsToken updates
+	jsTokenMutex      sync.RWMutex
 }
 
 // ChunkJob represents a chunk upload job
@@ -56,11 +55,6 @@ type ChunkResult struct {
 	partseq int
 	md5     string
 	err     error
-}
-
-// Common response structure for checking errno
-type BaseResponse struct {
-	Errno int `json:"errno"`
 }
 
 func (d *Terabox) Config() driver.Config {
@@ -85,7 +79,14 @@ func (d *Terabox) Init(ctx context.Context) error {
 		}
 		return fmt.Errorf("failed to check login status according to cookie")
 	}
-	return err
+	
+	// Initialize JSToken on startup
+	if err := d.getJsToken(ctx); err != nil {
+		log.Warnf("Failed to initialize JSToken: %v", err)
+		// Don't return error as JSToken might not be needed for all operations
+	}
+	
+	return nil
 }
 
 func (d *Terabox) Drop(ctx context.Context) error {
@@ -109,159 +110,208 @@ func (d *Terabox) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	return d.linkOfficial(file, args)
 }
 
-// refreshJsToken uses the existing resetJsToken method with thread safety
-func (d *Terabox) refreshJsToken(ctx context.Context) error {
-	d.tokenMutex.Lock()
-	defer d.tokenMutex.Unlock()
-
-	log.Debugln("Refreshing JS token...")
-	
-	// Use the existing resetJsToken method
-	err := d.resetJsToken()
-	if err != nil {
-		return fmt.Errorf("failed to refresh JS token: %v", err)
-	}
-	
-	log.Debugln("JS token refreshed successfully")
-	return nil
-}
-
-// executeWithTokenRefresh executes a function with automatic token refresh on failure
-func (d *Terabox) executeWithTokenRefresh(ctx context.Context, operation func() error) error {
-	var lastErr error
-	
-	for attempt := 0; attempt <= jsTokenRefreshRetries; attempt++ {
-		lastErr = operation()
-		
-		if lastErr == nil {
-			return nil
-		}
-		
-		// Check if the error is due to token expiration
-		if d.isTokenExpiredError(lastErr) && attempt < jsTokenRefreshRetries {
-			log.Debugf("Token expired error detected, refreshing token (attempt %d/%d)", attempt+1, jsTokenRefreshRetries)
-			
-			if refreshErr := d.refreshJsToken(ctx); refreshErr != nil {
-				log.Errorf("Failed to refresh JS token: %v", refreshErr)
-				return fmt.Errorf("token refresh failed: %v", refreshErr)
-			}
-			
-			// Wait a bit before retrying
-			time.Sleep(time.Second)
-			continue
-		}
-		
-		break
-	}
-	
-	return lastErr
-}
-
-// isTokenExpiredError checks if an error indicates token expiration
-// Since your request() method already handles errno 4000023 token expiration,
-// we primarily check for that specific error code
-func (d *Terabox) isTokenExpiredError(err error) bool {
-	if err == nil {
-		return false
-	}
-	
-	// Check for the specific errno 4000023 which your request() method handles
-	errStr := err.Error()
-	return contains(errStr, "4000023") ||
-		   contains(errStr, "token") && (contains(errStr, "expired") || contains(errStr, "invalid")) ||
-		   contains(errStr, "unauthorized")
-}
-
-// Helper function to check if string contains substring (case-insensitive)
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && 
-		   (s == substr || len(s) > len(substr) && 
-		    (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
-		     indexSubstring(s, substr) != -1))
-}
-
-func indexSubstring(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
-
 func (d *Terabox) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
-	return d.executeWithTokenRefresh(ctx, func() error {
-		params := map[string]string{
-			"a": "commit",
-		}
-		data := map[string]string{
-			"path":       stdpath.Join(parentDir.GetPath(), dirName),
-			"isdir":      "1",
-			"block_list": "[]",
-		}
-		res, err := d.post_form("/api/create", params, data, nil)
-		log.Debugln(string(res))
-		return err
-	})
+	params := map[string]string{
+		"a": "commit",
+	}
+	data := map[string]string{
+		"path":       stdpath.Join(parentDir.GetPath(), dirName),
+		"isdir":      "1",
+		"block_list": "[]",
+	}
+	res, err := d.post_form("/api/create", params, data, nil)
+	log.Debugln(string(res))
+	return err
 }
 
 func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
-	return d.executeWithTokenRefresh(ctx, func() error {
-		data := []base.Json{
-			{
-				"path":    srcObj.GetPath(),
-				"dest":    dstDir.GetPath(),
-				"newname": srcObj.GetName(),
-			},
-		}
-		_, err := d.manage("move", data)
-		return err
-	})
+	data := []base.Json{
+		{
+			"path":    srcObj.GetPath(),
+			"dest":    dstDir.GetPath(),
+			"newname": srcObj.GetName(),
+		},
+	}
+	_, err := d.manage(ctx, "move", data)
+	return err
 }
 
 func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
-	return d.executeWithTokenRefresh(ctx, func() error {
-		data := []base.Json{
-			{
-				"path":    srcObj.GetPath(),
-				"newname": newName,
-			},
-		}
-		_, err := d.manage("rename", data)
-		return err
-	})
+	data := []base.Json{
+		{
+			"path":    srcObj.GetPath(),
+			"newname": newName,
+		},
+	}
+	_, err := d.manage(ctx, "rename", data)
+	return err
 }
 
 func (d *Terabox) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
-	return d.executeWithTokenRefresh(ctx, func() error {
-		data := []base.Json{
-			{
-				"path":    srcObj.GetPath(),
-				"dest":    dstDir.GetPath(),
-				"newname": srcObj.GetName(),
-			},
-		}
-		_, err := d.manage("copy", data)
-		return err
-	})
+	data := []base.Json{
+		{
+			"path":    srcObj.GetPath(),
+			"dest":    dstDir.GetPath(),
+			"newname": srcObj.GetName(),
+		},
+	}
+	_, err := d.manage(ctx, "copy", data)
+	return err
 }
 
 func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
-	return d.executeWithTokenRefresh(ctx, func() error {
-		data := []string{obj.GetPath()}
-		_, err := d.manage("delete", data)
-		return err
-	})
+	data := []string{obj.GetPath()}
+	_, err := d.manage(ctx, "delete", data)
+	return err
+}
+
+// getJsToken retrieves the JSToken from the main page
+func (d *Terabox) getJsToken(ctx context.Context) error {
+	d.jsTokenMutex.Lock()
+	defer d.jsTokenMutex.Unlock()
+	
+	// Make a GET request to the main page
+	req := base.RestyClient.R().
+		SetContext(ctx).
+		SetHeaders(map[string]string{
+			"Cookie":     d.Cookie,
+			"User-Agent": base.UserAgent,
+			"Referer":    d.base_url,
+		})
+	
+	resp, err := req.Get(d.base_url)
+	if err != nil {
+		return fmt.Errorf("failed to get main page: %v", err)
+	}
+	
+	if resp.StatusCode() != 200 {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+	}
+	
+	body := resp.String()
+	
+	// Extract JSToken using the pattern from rclone implementation
+	jsToken := getStrBetween(body, "`function%20fn%28a%29%7Bwindow.jsToken%20%3D%20a%7D%3Bfn%28%22", "%22%29`")
+	if jsToken == "" {
+		// Try alternative patterns that might be used
+		patterns := []string{
+			`window\.jsToken\s*=\s*"([^"]+)"`,
+			`jsToken\s*=\s*"([^"]+)"`,
+			`fn\("([^"]+)"\)`,
+		}
+		
+		for _, pattern := range patterns {
+			re := regexp.MustCompile(pattern)
+			matches := re.FindStringSubmatch(body)
+			if len(matches) > 1 {
+				jsToken = matches[1]
+				break
+			}
+		}
+	}
+	
+	if jsToken == "" {
+		return fmt.Errorf("jsToken not found in response")
+	}
+	
+	d.JsToken = jsToken
+	log.Debugf("JSToken retrieved: %s", jsToken)
+	return nil
+}
+
+// getStrBetween extracts string between two delimiters
+func getStrBetween(str, start, end string) string {
+	startIdx := strings.Index(str, start)
+	if startIdx == -1 {
+		return ""
+	}
+	startIdx += len(start)
+	
+	endIdx := strings.Index(str[startIdx:], end)
+	if endIdx == -1 {
+		return ""
+	}
+	
+	return str[startIdx : startIdx+endIdx]
+}
+
+// ensureJsToken ensures JSToken is available, fetching it if necessary
+func (d *Terabox) ensureJsToken(ctx context.Context) error {
+	d.jsTokenMutex.RLock()
+	hasToken := d.JsToken != ""
+	d.jsTokenMutex.RUnlock()
+	
+	if !hasToken {
+		return d.getJsToken(ctx)
+	}
+	return nil
+}
+
+// manage handles file operations with JSToken support
+func (d *Terabox) manage(ctx context.Context, operation string, data interface{}) ([]byte, error) {
+	// Ensure JSToken is available
+	if err := d.ensureJsToken(ctx); err != nil {
+		return nil, fmt.Errorf("failed to get JSToken: %v", err)
+	}
+	
+	maxRetries := 3
+	for retry := 0; retry < maxRetries; retry++ {
+		result, err := d.performManageOperation(ctx, operation, data)
+		if err != nil {
+			// Check if it's a JSToken-related error
+			if strings.Contains(err.Error(), "jsToken") || 
+			   strings.Contains(err.Error(), "4000023") ||
+			   strings.Contains(err.Error(), "450016") {
+				log.Debugf("JSToken error detected, refreshing token (retry %d/%d)", retry+1, maxRetries)
+				if tokenErr := d.getJsToken(ctx); tokenErr != nil {
+					log.Warnf("Failed to refresh JSToken: %v", tokenErr)
+				}
+				continue
+			}
+			return nil, err
+		}
+		return result, nil
+	}
+	
+	return nil, fmt.Errorf("operation failed after %d retries", maxRetries)
+}
+
+// performManageOperation performs the actual file operation
+func (d *Terabox) performManageOperation(ctx context.Context, operation string, data interface{}) ([]byte, error) {
+	params := map[string]string{
+		"opera":  operation,
+		"async":  "1",
+		"onnest": "fail",
+	}
+	
+	// Add JSToken to parameters
+	d.jsTokenMutex.RLock()
+	if d.JsToken != "" {
+		params["jsToken"] = d.JsToken
+	}
+	d.jsTokenMutex.RUnlock()
+	
+	// Convert data to JSON string
+	var jsonData []byte
+	var err error
+	if operation == "delete" {
+		jsonData, err = utils.Json.Marshal(data)
+	} else {
+		jsonData, err = utils.Json.Marshal(data)
+	}
+	if err != nil {
+		return nil, err
+	}
+	
+	// Prepare form data
+	formData := map[string]string{
+		"filelist": string(jsonData),
+	}
+	
+	return d.post_form("/api/filemanager", params, formData, nil)
 }
 
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	return d.executeWithTokenRefresh(ctx, func() error {
-		return d.performUpload(ctx, dstDir, stream, up)
-	})
-}
-
-// performUpload contains the actual upload logic, separated for token refresh handling
-func (d *Terabox) performUpload(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
 	// Get upload server using the existing utility function
 	uploadServerURL, err := d.getUploadServer(ctx)
 	if err != nil {
@@ -471,11 +521,6 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 		// Upload chunk with retries
 		var uploadErr error
 		for retry := 0; retry < maxUploadRetries; retry++ {
-			// Read the current JS token safely
-			d.tokenMutex.RLock()
-			currentJsToken := d.JsToken
-			d.tokenMutex.RUnlock()
-
 			// Use the same request pattern as the existing code
 			req := base.RestyClient.R().
 				SetContext(ctx).
@@ -487,7 +532,6 @@ func (d *Terabox) uploadWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-c
 					"Referer":          d.base_url,
 					"User-Agent":       base.UserAgent,
 					"X-Requested-With": "XMLHttpRequest",
-					"X-JSToken":        currentJsToken, // Include JS token in request
 				})
 			
 			res, err := req.Post("https://" + host + "/rest/2.0/pcs/superfile2")
