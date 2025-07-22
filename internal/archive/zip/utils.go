@@ -2,13 +2,18 @@ package zip
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/fs"
+	"os"
+	"path/filepath"
 	stdpath "path"
 	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/archive/tool"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/saintfish/chardet"
 	"github.com/yeka/zip"
@@ -84,6 +89,102 @@ func filterPassword(err error) error {
 		return errs.WrongArchivePassword
 	}
 	return err
+}
+
+func decompressStreaming(zipReader *zip.Reader, outputPath string, args model.ArchiveInnerArgs, up model.UpdateProgress) error {
+	innerPath := strings.TrimPrefix(args.InnerPath, "/")
+	if innerPath != "" && !strings.HasSuffix(innerPath, "/") {
+		innerPath += "/"
+	}
+	
+	totalSize := int64(0)
+	extractedSize := int64(0)
+	
+	// Calculate total size for progress tracking
+	for _, file := range zipReader.File {
+		fileName := decodeName(file.Name)
+		if innerPath != "" && !strings.HasPrefix(fileName, innerPath) {
+			continue
+		}
+		totalSize += file.FileInfo().Size()
+	}
+	
+	// Extract files one by one, streaming directly to disk
+	for _, file := range zipReader.File {
+		fileName := decodeName(file.Name)
+		
+		// Skip files not in the requested inner path
+		if innerPath != "" && !strings.HasPrefix(fileName, innerPath) {
+			continue
+		}
+		
+		// Remove inner path prefix if extracting from subdirectory
+		if innerPath != "" {
+			fileName = strings.TrimPrefix(fileName, innerPath)
+		}
+		
+		if fileName == "" {
+			continue
+		}
+		
+		destPath := filepath.Join(outputPath, fileName)
+		
+		// Create directory structure
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(destPath, file.FileInfo().Mode()); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", destPath, err)
+			}
+			continue
+		}
+		
+		// Create parent directories
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return fmt.Errorf("failed to create parent directory for %s: %w", destPath, err)
+		}
+		
+		// Handle encrypted files
+		if file.IsEncrypted() {
+			file.SetPassword(args.Password)
+		}
+		
+		// Open source file from zip (streaming reader)
+		srcReader, err := file.Open()
+		if err != nil {
+			return filterPassword(fmt.Errorf("failed to open file %s: %w", file.Name, err))
+		}
+		
+		// Create destination file
+		destFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.FileInfo().Mode())
+		if err != nil {
+			srcReader.Close()
+			return fmt.Errorf("failed to create file %s: %w", destPath, err)
+		}
+		
+		// Stream copy from zip to disk (no RAM buffering of entire file)
+		copied, err := io.Copy(destFile, srcReader)
+		
+		// Close resources
+		srcReader.Close()
+		destFile.Close()
+		
+		if err != nil {
+			return fmt.Errorf("failed to extract file %s: %w", fileName, err)
+		}
+		
+		// Set file modification time
+		if modTime := file.FileInfo().ModTime(); !modTime.IsZero() {
+			os.Chtimes(destPath, time.Now(), modTime)
+		}
+		
+		// Update progress
+		extractedSize += copied
+		if up != nil {
+			progress := float64(extractedSize) / float64(totalSize) * 100
+			up(progress)
+		}
+	}
+	
+	return nil
 }
 
 func decodeName(name string) string {
