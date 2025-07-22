@@ -109,8 +109,9 @@ func (Zip) Extract(ss []*stream.SeekableStream, args model.ArchiveInnerArgs) (io
 			}
 			r, e := file.Open()
 			if e != nil {
-				return nil, 0, e
+				return nil, 0, filterPassword(e)
 			}
+			// Return the reader directly for streaming - no buffering in RAM
 			return r, file.FileInfo().Size(), nil
 		}
 	}
@@ -122,7 +123,9 @@ func (Zip) Decompress(ss []*stream.SeekableStream, outputPath string, args model
 	if err != nil {
 		return err
 	}
-	return tool.DecompressFromFolderTraversal(&WrapReader{Reader: zipReader}, outputPath, args, up)
+	
+	// Stream extraction directly to directory without loading into RAM
+	return decompressStreaming(zipReader, outputPath, args, up)
 }
 
 var _ tool.Tool = (*Zip)(nil)
