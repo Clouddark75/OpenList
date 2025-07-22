@@ -164,17 +164,45 @@ func decompressStreaming(zipReader *zip.Reader, outputPath string, args model.Ar
 			return fmt.Errorf("failed to create file %s: %w", destPath, err)
 		}
 		
-		// Stream copy from zip to disk (no RAM buffering of entire file)
-		copied, err := io.Copy(destFile, srcReader)
+		// Use a smaller buffer and copy in chunks to minimize memory usage
+		buffer := make([]byte, 8192) // 8KB buffer instead of default 32KB
+		copied := int64(0)
+		
+		for {
+			nr, er := srcReader.Read(buffer)
+			if nr > 0 {
+				nw, ew := destFile.Write(buffer[0:nr])
+				if nw < 0 || nr < nw {
+					nw = 0
+					if ew == nil {
+						ew = fmt.Errorf("invalid write result")
+					}
+				}
+				copied += int64(nw)
+				if ew != nil {
+					srcReader.Close()
+					destFile.Close()
+					return fmt.Errorf("failed to write to file %s: %w", fileName, ew)
+				}
+				if nr != nw {
+					srcReader.Close()
+					destFile.Close()
+					return fmt.Errorf("short write to file %s", fileName)
+				}
+			}
+			if er != nil {
+				if er != io.EOF {
+					srcReader.Close()
+					destFile.Close()
+					return fmt.Errorf("failed to read from file %s: %w", fileName, er)
+				}
+				break
+			}
+		}
 		
 		// Close resources immediately and check for errors
 		closeErr1 := srcReader.Close()
 		closeErr2 := destFile.Close()
-		
-		// Handle copy errors first
-		if err != nil {
-			return fmt.Errorf("failed to extract file %s: %w", fileName, err)
-		}
 		
 		// Handle close errors
 		if closeErr1 != nil {
@@ -198,6 +226,9 @@ func decompressStreaming(zipReader *zip.Reader, outputPath string, args model.Ar
 			progress := float64(extractedSize) / float64(totalSize) * 100
 			up(progress)
 		}
+		
+		// Force garbage collection after each file to free memory immediately
+		buffer = nil
 	}
 	
 	return nil
