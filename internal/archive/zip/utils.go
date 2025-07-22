@@ -127,7 +127,11 @@ func decompressStreaming(zipReader *zip.Reader, outputPath string, args model.Ar
 			continue
 		}
 		
+		// Security check: prevent path traversal attacks
 		destPath := filepath.Join(outputPath, fileName)
+		if !strings.HasPrefix(destPath, filepath.Clean(outputPath)+string(os.PathSeparator)) {
+			return fmt.Errorf("invalid file path: %s", fileName)
+		}
 		
 		// Create directory structure
 		if file.FileInfo().IsDir() {
@@ -163,22 +167,34 @@ func decompressStreaming(zipReader *zip.Reader, outputPath string, args model.Ar
 		// Stream copy from zip to disk (no RAM buffering of entire file)
 		copied, err := io.Copy(destFile, srcReader)
 		
-		// Close resources
-		srcReader.Close()
-		destFile.Close()
+		// Close resources immediately and check for errors
+		closeErr1 := srcReader.Close()
+		closeErr2 := destFile.Close()
 		
+		// Handle copy errors first
 		if err != nil {
 			return fmt.Errorf("failed to extract file %s: %w", fileName, err)
 		}
 		
-		// Set file modification time
-		if modTime := file.FileInfo().ModTime(); !modTime.IsZero() {
-			os.Chtimes(destPath, time.Now(), modTime)
+		// Handle close errors
+		if closeErr1 != nil {
+			return fmt.Errorf("failed to close source reader for %s: %w", fileName, closeErr1)
+		}
+		if closeErr2 != nil {
+			return fmt.Errorf("failed to close destination file %s: %w", destPath, closeErr2)
 		}
 		
-		// Update progress
+		// Set file modification time
+		if modTime := file.FileInfo().ModTime(); !modTime.IsZero() {
+			if err := os.Chtimes(destPath, time.Now(), modTime); err != nil {
+				// Don't fail the entire extraction for timestamp issues, just log
+				// Could add logging here if needed
+			}
+		}
+		
+		// Update progress - protect against division by zero
 		extractedSize += copied
-		if up != nil {
+		if up != nil && totalSize > 0 {
 			progress := float64(extractedSize) / float64(totalSize) * 100
 			up(progress)
 		}
