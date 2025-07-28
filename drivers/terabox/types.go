@@ -74,6 +74,40 @@ type DownloadResp2 struct {
 	//RequestID int64 `json:"request_id"`
 }
 
+type DownloadChunkInfo struct {
+	Index      int
+	Start      int64
+	End        int64
+	Size       int64
+	Data       []byte
+	Error      error
+	Downloaded bool
+}
+
+type StreamingMultiChunkReader struct {
+	chunks        []DownloadChunkInfo
+	currentChunk  int
+	currentOffset int64
+	totalSize     int64
+	chunkSize     int64
+	url           string
+	headers       http.Header
+	ctx           context.Context
+	driver        *Terabox
+	
+	// Buffering and prefetch
+	chunkBuffer   chan int // Channel to signal which chunks to download
+	downloadedCh  chan DownloadChunkInfo // Channel for completed downloads
+	mu            sync.RWMutex
+	closed        bool
+	
+	// Prefetch control
+	prefetchSize  int // Number of chunks to prefetch ahead
+	numThreads    int
+	wg            sync.WaitGroup
+	cancelFunc    context.CancelFunc
+}
+
 type HomeInfoResp struct {
 	Errno int `json:"errno"`
 	Data  struct {
