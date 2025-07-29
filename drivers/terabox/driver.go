@@ -15,7 +15,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"github.com/avast/retry-go/v4"
+	"github.com/avast/retry-go"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
