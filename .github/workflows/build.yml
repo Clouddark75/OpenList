@@ -45,7 +45,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           musl-target-format: $os-$musl-$arch
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           out-dir: build
           x-flags: |
             github.com/OpenListTeam/OpenList/v4/internal/conf.BuiltAt=$built_at
