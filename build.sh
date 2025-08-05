@@ -17,10 +17,10 @@ fi
 
 if [ "$1" = "dev" ]; then
   version="dev"
-  webVersion="dev"
+  webVersion="rolling"
 elif [ "$1" = "beta" ]; then
   version="beta"
-  webVersion="dev"
+  webVersion="rolling"
 else
   git tag -d beta || true
   # Always true if there's no tag
@@ -45,26 +45,17 @@ ldflags="\
 -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion' \
 "
 
-FetchWebDev() {
-  pre_release_tag=$(eval "curl -fsSL --max-time 2 $githubAuthArgs https://api.github.com/repos/OpenListTeam/OpenList-Frontend/releases" | jq -r 'map(select(.prerelease)) | first | .tag_name')
-  if [ -z "$pre_release_tag" ] || [ "$pre_release_tag" == "null" ]; then
-    # fall back to latest release
-    pre_release_json=$(eval "curl -fsSL --max-time 2 $githubAuthArgs -H \"Accept: application/vnd.github.v3+json\" \"https://api.github.com/repos/OpenListTeam/OpenList-Frontend/releases/latest\"")
-  else
-    pre_release_json=$(eval "curl -fsSL --max-time 2 $githubAuthArgs -H \"Accept: application/vnd.github.v3+json\" \"https://api.github.com/repos/OpenListTeam/OpenList-Frontend/releases/tags/$pre_release_tag\"")
-  fi
+FetchWebRolling() {
+  pre_release_json=$(eval "curl -fsSL --max-time 2 $githubAuthArgs -H \"Accept: application/vnd.github.v3+json\" \"https://api.github.com/repos/OpenListTeam/OpenList-Frontend/releases/tags/rolling\"")
   pre_release_assets=$(echo "$pre_release_json" | jq -r '.assets[].browser_download_url')
   
-  if [ "$useLite" = true ]; then
-    pre_release_tar_url=$(echo "$pre_release_assets" | grep "openlist-frontend-dist-lite" | grep "\.tar\.gz$")
-  else
-    pre_release_tar_url=$(echo "$pre_release_assets" | grep "openlist-frontend-dist" | grep -v "lite" | grep "\.tar\.gz$")
-  fi
-  
-  curl -fsSL "$pre_release_tar_url" -o web-dist-dev.tar.gz
+  # There is no lite for rolling
+  pre_release_tar_url=$(echo "$pre_release_assets" | grep "openlist-frontend-dist" | grep -v "lite" | grep "\.tar\.gz$")
+
+  curl -fsSL "$pre_release_tar_url" -o dist.tar.gz
   rm -rf public/dist && mkdir -p public/dist
-  tar -zxvf web-dist-dev.tar.gz -C public/dist
-  rm -rf web-dist-dev.tar.gz
+  tar -zxvf dist.tar.gz -C public/dist
+  rm -rf dist.tar.gz
 }
 
 FetchWebRelease() {
@@ -173,7 +164,7 @@ BuildDocker() {
 PrepareBuildDockerMusl() {
   mkdir -p build/musl-libs
   BASE="https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
-  FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross i486-linux-musl-cross s390x-linux-musl-cross armv6-linux-musleabihf-cross armv7l-linux-musleabihf-cross riscv64-linux-musl-cross powerpc64le-linux-musl-cross)
+  FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross i486-linux-musl-cross armv6-linux-musleabihf-cross armv7l-linux-musleabihf-cross riscv64-linux-musl-cross powerpc64le-linux-musl-cross loongarch64-linux-musl-cross) ## Disable s390x-linux-musl-cross builds
   for i in "${FILES[@]}"; do
     url="${BASE}${i}.tgz"
     lib_tgz="build/${i}.tgz"
@@ -192,8 +183,8 @@ BuildDockerMultiplatform() {
   docker_lflags="--extldflags '-static -fpic' $ldflags"
   export CGO_ENABLED=1
 
-  OS_ARCHES=(linux-amd64 linux-arm64 linux-386 linux-s390x linux-riscv64 linux-ppc64le)
-  CGO_ARGS=(x86_64-linux-musl-gcc aarch64-linux-musl-gcc i486-linux-musl-gcc s390x-linux-musl-gcc riscv64-linux-musl-gcc powerpc64le-linux-musl-gcc)
+  OS_ARCHES=(linux-amd64 linux-arm64 linux-386 linux-riscv64 linux-ppc64le linux-loong64) ## Disable linux-s390x builds
+  CGO_ARGS=(x86_64-linux-musl-gcc aarch64-linux-musl-gcc i486-linux-musl-gcc riscv64-linux-musl-gcc powerpc64le-linux-musl-gcc loongarch64-linux-musl-gcc) ## Disable s390x-linux-musl-gcc builds
   for i in "${!OS_ARCHES[@]}"; do
     os_arch=${OS_ARCHES[$i]}
     cgo_cc=${CGO_ARGS[$i]}
@@ -590,7 +581,7 @@ for arg in "$@"; do
 done
 
 if [ "$buildType" = "dev" ]; then
-  FetchWebDev
+  FetchWebRolling
   if [ "$dockerType" = "docker" ]; then
     BuildDocker
   elif [ "$dockerType" = "docker-multiplatform" ]; then
@@ -602,7 +593,7 @@ if [ "$buildType" = "dev" ]; then
   fi
 elif [ "$buildType" = "release" -o "$buildType" = "beta" ]; then
   if [ "$buildType" = "beta" ]; then
-    FetchWebDev
+    FetchWebRolling
   else
     FetchWebRelease
   fi
