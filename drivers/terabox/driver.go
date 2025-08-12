@@ -41,23 +41,10 @@ func (d *Terabox) GetAddition() driver.Additional {
 func (d *Terabox) Init(ctx context.Context) error {
 	var resp CheckLoginResp
 	d.base_url = "https://www.terabox.com"
-	d.url_domain_prefix = "jp"
-	
-	// Initialize jsToken first with retry
-	err := retry.Do(
-		func() error {
-			return d.resetJsToken()
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to get initial jsToken (attempt %d): %v", n+1, err)
-		}),
-	)
+	d.url_domain_prefix = "jp"	
+	_, err := d.get("/api/check/login", nil, &resp)
 	if err != nil {
-		log.Warnf("Failed to get initial jsToken after retries: %v", err)
-		// Continue without jsToken, it will be refreshed as needed
+		return err
 	}
 	
 	// Check login status with retry
