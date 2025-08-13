@@ -51,9 +51,8 @@ func (d *Pan115) login() error {
 		d.Cookie = fmt.Sprintf("UID=%s;CID=%s;SEID=%s;KID=%s", cr.UID, cr.CID, cr.SEID, cr.KID)
 		d.QRCodeToken = ""
 	} else if d.Cookie != "" {
-		if err = cr.FromCookie(d.Cookie); err != nil {
-			return errors.Wrap(err, "failed to login by cookies")
-		}
+		// feed the entire browser Cookie header verbatim
+		cr.RawCookie = d.Cookie
 		d.client.ImportCredential(cr)
 	} else {
 		return errors.New("missing cookie or qrcode account")
