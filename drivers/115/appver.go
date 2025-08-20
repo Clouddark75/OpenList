@@ -2,7 +2,7 @@ package _115
 
 import (
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
-	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
+	driver115 "github.com/Clouddark75/115driver/pkg/driver"
 	log "github.com/sirupsen/logrus"
 )
 
