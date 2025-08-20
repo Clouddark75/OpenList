@@ -7,16 +7,20 @@ import (
 
 type Addition struct {
 	driver.RootPath
-	Cookie string `json:"cookie" required:"true"`
-	//JsToken        string `json:"js_token" type:"string" required:"true"`
-	DownloadAPI    string `json:"download_api" type:"select" options:"official,crack" default:"official"`
-	OrderBy        string `json:"order_by" type:"select" options:"name,time,size" default:"name"`
-	OrderDirection string `json:"order_direction" type:"select" options:"asc,desc" default:"asc"`
+	Cookie         string `json:"cookie" required:"true" help:"Terabox session cookie (get from browser developer tools)"`
+	UserAgent      string `json:"user_agent" required:"true" default:"terabox;1.41.5.140;PC;PC-Windows;10.0.26100;WindowsTeraBox" help:"User agent string for API requests"`
+	DownloadAPI    string `json:"download_api" type:"select" options:"official,crack" default:"crack" help:"API method for downloading files"`
+	OrderBy        string `json:"order_by" type:"select" options:"name,time,size" default:"name" help:"Default sorting field for file listings"`
+	OrderDirection string `json:"order_direction" type:"select" options:"asc,desc" default:"asc" help:"Default sorting direction"`
+	UploadThreads  int    `json:"upload_threads" type:"number" default:"3" help:"Number of parallel threads for uploads (1-10, default: 2)"`
+	RetryCount     int    `json:"retry_count" type:"number" default:"10" help:"Number of retry attempts for failed operations (1-10, default: 3)"`
 }
 
 var config = driver.Config{
 	Name:        "Terabox",
 	DefaultRoot: "/",
+	// No external dependencies needed since we use retry-go
+	//NoOverlayDownload: true,
 }
 
 func init() {
