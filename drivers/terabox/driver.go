@@ -40,7 +40,7 @@ func (d *Terabox) GetAddition() driver.Additional {
 
 func (d *Terabox) Init(ctx context.Context) error {
 	var resp CheckLoginResp
-	d.base_url = "https://www.terabox.com"
+	d.base_url = "https://www.terabox.app"
 	d.url_domain_prefix = "jp"	
 	_, err := d.get("/api/check/login", nil, &resp)
 	if err != nil {
