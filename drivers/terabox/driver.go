@@ -41,23 +41,10 @@ func (d *Terabox) GetAddition() driver.Additional {
 func (d *Terabox) Init(ctx context.Context) error {
 	var resp CheckLoginResp
 	d.base_url = "https://www.terabox.com"
-	d.url_domain_prefix = "jp"
-	
-	// Initialize jsToken first with retry
-	err := retry.Do(
-		func() error {
-			return d.resetJsToken()
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to get initial jsToken (attempt %d): %v", n+1, err)
-		}),
-	)
+	d.url_domain_prefix = "jp"	
+	_, err := d.get("/api/check/login", nil, &resp)
 	if err != nil {
-		log.Warnf("Failed to get initial jsToken after retries: %v", err)
-		// Continue without jsToken, it will be refreshed as needed
+		return err
 	}
 	
 	// Check login status with retry
@@ -91,20 +78,7 @@ func (d *Terabox) Drop(ctx context.Context) error {
 }
 
 func (d *Terabox) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
-	var files []File
-	err := retry.Do(
-		func() error {
-			var err error
-			files, err = d.getFiles(dir.GetPath())
-			return err
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to list files (attempt %d): %v", n+1, err)
-		}),
-	)
+	files, err := d.getFiles(dir.GetPath())
 	if err != nil {
 		return nil, err
 	}
@@ -136,59 +110,29 @@ func (d *Terabox) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 }
 
 func (d *Terabox) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
-	return retry.Do(
-		func() error {
-			// Ensure jsToken is available for directory creation
-			if err := d.ensureJsToken(); err != nil {
-				return fmt.Errorf("failed to get jsToken for mkdir: %v", err)
-			}
-			
-			params := map[string]string{
-				"a": "commit",
-			}
-			data := map[string]string{
-				"path":       stdpath.Join(parentDir.GetPath(), dirName),
-				"isdir":      "1",
-				"block_list": "[]",
-			}
-			res, err := d.post_form("/api/create", params, data, nil)
-			log.Debugln(string(res))
-			return err
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to create directory (attempt %d): %v", n+1, err)
-		}),
-	)
+	params := map[string]string{
+		"a": "commit",
+	}
+	data := map[string]string{
+		"path":       stdpath.Join(parentDir.GetPath(), dirName),
+		"isdir":      "1",
+		"block_list": "[]",
+	}
+	res, err := d.post_form("/api/create", params, data, nil)
+	log.Debugln(string(res))
+	return err
 }
 
 func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
-	return retry.Do(
-		func() error {
-			// Ensure jsToken is available for move operation
-			if err := d.ensureJsToken(); err != nil {
-				return fmt.Errorf("failed to get jsToken for move: %v", err)
-			}
-			
-			data := []base.Json{
-				{
-					"path":    srcObj.GetPath(),
-					"dest":    dstDir.GetPath(),
-					"newname": srcObj.GetName(),
-				},
-			}
-			_, err := d.manage("move", data)
-			return err
+	data := []base.Json{
+		{
+			"path":    srcObj.GetPath(),
+			"dest":    dstDir.GetPath(),
+			"newname": srcObj.GetName(),
 		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to move file (attempt %d): %v", n+1, err)
-		}),
-	)
+	}
+	_, err := d.manage("move", data)
+	return err
 }
 
 func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
