@@ -12,7 +12,7 @@ type Addition struct {
 	DownloadAPI    string `json:"download_api" type:"select" options:"official,crack" default:"crack" help:"API method for downloading files"`
 	OrderBy        string `json:"order_by" type:"select" options:"name,time,size" default:"name" help:"Default sorting field for file listings"`
 	OrderDirection string `json:"order_direction" type:"select" options:"asc,desc" default:"asc" help:"Default sorting direction"`
-	UploadThreads  int    `json:"upload_threads" type:"number" default:"3" help:"Number of parallel threads for uploads (1-10, default: 2)"`
+	UploadThreads  int    `json:"upload_threads" type:"number" default:"4" help:"Number of parallel threads for uploads (1-10, default: 2)"`
 	RetryCount     int    `json:"retry_count" type:"number" default:"10" help:"Number of retry attempts for failed operations (1-10, default: 3)"`
 }
 
