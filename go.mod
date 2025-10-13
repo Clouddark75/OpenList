@@ -59,7 +59,7 @@ require (
 	github.com/spf13/afero v1.14.0
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
-	github.com/t3rm1n4l/go-mega v0.0.0-20241213151442-a19cff0ec7b5
+	github.com/t3rm1n4l/go-mega v0.0.0-20250926104142-ccb8d3498e6c
 	github.com/tchap/go-patricia/v2 v2.3.3
 	github.com/u2takey/ffmpeg-go v0.5.0
 	github.com/upyun/go-sdk/v3 v3.0.4
