@@ -34,8 +34,14 @@ var tokenCache = struct {
 
 // GetCookie obtiene el token de autenticación con caché automático
 // Reemplaza la función original que retornaba cookies FedAuth/rtFa
+// NOTA: Para cuentas universitarias con MFA, usa GetCookieInteractive() en su lugar
 func GetCookie(username, password, siteUrl string) (string, error) {
-	cacheKey := fmt.Sprintf("%s:%s", username, siteUrl)
+	return GetCookieWithTenant(username, password, siteUrl, "")
+}
+
+// GetCookieWithTenant obtiene el token con tenant ID específico
+func GetCookieWithTenant(username, password, siteUrl, tenantID string) (string, error) {
+	cacheKey := fmt.Sprintf("%s:%s:%s", username, siteUrl, tenantID)
 	
 	// Intentar obtener del caché
 	tokenCache.RLock()
@@ -49,7 +55,7 @@ func GetCookie(username, password, siteUrl string) (string, error) {
 	
 	// Si existe pero expiró, intentar refrescar
 	if exists && cachedToken.RefreshToken != "" {
-		ca := New(username, password, siteUrl)
+		ca := NewWithTenant(username, password, siteUrl, tenantID)
 		newToken, err := ca.RefreshAccessToken(cachedToken.RefreshToken)
 		if err == nil {
 			// Refresh exitoso, actualizar caché
@@ -61,11 +67,13 @@ func GetCookie(username, password, siteUrl string) (string, error) {
 		// Si el refresh falló, continuar para obtener token nuevo
 	}
 	
-	// Obtener token nuevo
-	ca := New(username, password, siteUrl)
+	// Intentar ROPC primero (funciona si no hay MFA)
+	ca := NewWithTenant(username, password, siteUrl, tenantID)
 	token, err := ca.GetAccessToken()
 	if err != nil {
-		return "", err
+		// ROPC falló (probablemente MFA o bloqueado por políticas)
+		// Fallback a Device Flow
+		return GetCookieInteractive(siteUrl, nil)
 	}
 	
 	// Guardar en caché
