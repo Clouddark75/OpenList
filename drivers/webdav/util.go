@@ -23,11 +23,14 @@ func (d *WebDav) setClient() error {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: d.TlsInsecureSkipVerify},
 	})
 	if d.isSharepoint() {
-		cookie, err := odrvcookie.GetCookie(d.Username, d.Password, d.Address)
+		// GetCookie ahora retorna "Bearer {token}" en lugar de cookies
+		authHeader, err := odrvcookie.GetCookie(d.Username, d.Password, d.Address)
 		if err == nil {
 			c.SetInterceptor(func(method string, rq *http.Request) {
+				// Eliminar autenticación básica
 				rq.Header.Del("Authorization")
-				rq.Header.Set("Cookie", cookie)
+				// Establecer token OAuth2 Bearer
+				rq.Header.Set("Authorization", authHeader)
 			})
 		} else {
 			return err
