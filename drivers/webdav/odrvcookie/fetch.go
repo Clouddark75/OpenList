@@ -20,11 +20,32 @@ type CookieAuth struct {
 
 // New crea una nueva estructura CookieAuth
 func New(pUser, pPass, pEndpoint string) CookieAuth {
+	return NewWithTenant(pUser, pPass, pEndpoint, "")
+}
+
+// NewWithTenant crea una nueva estructura CookieAuth con tenant ID específico
+func NewWithTenant(pUser, pPass, pEndpoint, pTenantID string) CookieAuth {
+	tenantID := pTenantID
+	
+	// Si no se proporcionó tenant ID, intentar auto-detectar
+	if tenantID == "" {
+		// Intentar desde el email del usuario
+		if discoveredTenant, err := DiscoverTenantID(pUser); err == nil {
+			tenantID = discoveredTenant
+		} else if discoveredTenant, err := DiscoverTenantIDFromSharePoint(pEndpoint); err == nil {
+			// Si falla, intentar desde la URL de SharePoint
+			tenantID = discoveredTenant
+		} else {
+			// Default: organizations
+			tenantID = "organizations"
+		}
+	}
+	
 	return CookieAuth{
 		user:     pUser,
 		pass:     pPass,
 		endpoint: pEndpoint,
-		tenantID: "common", // Usa "common" para multi-tenant
+		tenantID: tenantID,
 	}
 }
 
