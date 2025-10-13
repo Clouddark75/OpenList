@@ -1,207 +1,184 @@
-// Package odrvcookie can fetch authentication cookies for a sharepoint webdav endpoint
 package odrvcookie
 
 import (
 	"bytes"
-	"encoding/xml"
+	"encoding/json"
 	"fmt"
-	"html/template"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/OpenListTeam/OpenList/v4/drivers/base"
-	"golang.org/x/net/publicsuffix"
 )
 
-// CookieAuth hold the authentication information
-// These are username and password as well as the authentication endpoint
+// CookieAuth mantiene la información de autenticación
 type CookieAuth struct {
 	user     string
 	pass     string
 	endpoint string
+	tenantID string
 }
 
-// CookieResponse contains the requested cookies
-type CookieResponse struct {
-	RtFa    http.Cookie
-	FedAuth http.Cookie
-}
-
-// SuccessResponse hold a response from the sharepoint webdav
-type SuccessResponse struct {
-	XMLName xml.Name            `xml:"Envelope"`
-	Succ    SuccessResponseBody `xml:"Body"`
-}
-
-// SuccessResponseBody is the body of a success response, it holds the token
-type SuccessResponseBody struct {
-	XMLName xml.Name
-	Type    string    `xml:"RequestSecurityTokenResponse>TokenType"`
-	Created time.Time `xml:"RequestSecurityTokenResponse>Lifetime>Created"`
-	Expires time.Time `xml:"RequestSecurityTokenResponse>Lifetime>Expires"`
-	Token   string    `xml:"RequestSecurityTokenResponse>RequestedSecurityToken>BinarySecurityToken"`
-}
-
-// reqString is a template that gets populated with the user data in order to retrieve a "BinarySecurityToken"
-const reqString = `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
-xmlns:a="http://www.w3.org/2005/08/addressing"
-xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
-<s:Header>
-<a:Action s:mustUnderstand="1">http://schemas.xmlsoap.org/ws/2005/02/trust/RST/Issue</a:Action>
-<a:ReplyTo>
-<a:Address>http://www.w3.org/2005/08/addressing/anonymous</a:Address>
-</a:ReplyTo>
-<a:To s:mustUnderstand="1">{{ .LoginUrl }}</a:To>
-<o:Security s:mustUnderstand="1"
- xmlns:o="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
-<o:UsernameToken>
-  <o:Username>{{ .Username }}</o:Username>
-  <o:Password>{{ .Password }}</o:Password>
-</o:UsernameToken>
-</o:Security>
-</s:Header>
-<s:Body>
-<t:RequestSecurityToken xmlns:t="http://schemas.xmlsoap.org/ws/2005/02/trust">
-<wsp:AppliesTo xmlns:wsp="http://schemas.xmlsoap.org/ws/2004/09/policy">
-  <a:EndpointReference>
-    <a:Address>{{ .Address }}</a:Address>
-  </a:EndpointReference>
-</wsp:AppliesTo>
-<t:KeyType>http://schemas.xmlsoap.org/ws/2005/05/identity/NoProofKey</t:KeyType>
-<t:RequestType>http://schemas.xmlsoap.org/ws/2005/02/trust/Issue</t:RequestType>
-<t:TokenType>urn:oasis:names:tc:SAML:1.0:assertion</t:TokenType>
-</t:RequestSecurityToken>
-</s:Body>
-</s:Envelope>`
-
-// New creates a new CookieAuth struct
+// New crea una nueva estructura CookieAuth
 func New(pUser, pPass, pEndpoint string) CookieAuth {
-	retStruct := CookieAuth{
+	return CookieAuth{
 		user:     pUser,
 		pass:     pPass,
 		endpoint: pEndpoint,
+		tenantID: "common", // Usa "common" para multi-tenant
 	}
-
-	return retStruct
 }
 
-// Cookies creates a CookieResponse. It fetches the auth token and then
-// retrieves the Cookies
-func (ca *CookieAuth) Cookies() (CookieResponse, error) {
-	spToken, err := ca.getSPToken()
-	if err != nil {
-		return CookieResponse{}, err
-	}
-	return ca.getSPCookie(spToken)
-}
-
-func (ca *CookieAuth) getSPCookie(conf *SuccessResponse) (CookieResponse, error) {
-	spRoot, err := url.Parse(ca.endpoint)
-	if err != nil {
-		return CookieResponse{}, err
-	}
-
-	u, err := url.Parse("https://" + spRoot.Host + "/_forms/default.aspx?wa=wsignin1.0")
-	if err != nil {
-		return CookieResponse{}, err
-	}
-
-	// To authenticate with davfs or anything else we need two cookies (rtFa and FedAuth)
-	// In order to get them we use the token we got earlier and a cookieJar
-	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
-	if err != nil {
-		return CookieResponse{}, err
-	}
-
-	client := &http.Client{
-		Jar: jar,
-	}
-
-	// Send the previously acquired Token as a Post parameter
-	if _, err = client.Post(u.String(), "text/xml", strings.NewReader(conf.Succ.Token)); err != nil {
-		return CookieResponse{}, err
-	}
-
-	cookieResponse := CookieResponse{}
-	for _, cookie := range jar.Cookies(u) {
-		if (cookie.Name == "rtFa") || (cookie.Name == "FedAuth") {
-			switch cookie.Name {
-			case "rtFa":
-				cookieResponse.RtFa = *cookie
-			case "FedAuth":
-				cookieResponse.FedAuth = *cookie
-			}
-		}
-	}
-	return cookieResponse, err
-}
-
-var loginUrlsMap = map[string]string{
-	"com": "https://login.microsoftonline.com",
-	"cn":  "https://login.chinacloudapi.cn",
-	"us":  "https://login.microsoftonline.us",
-	"de":  "https://login.microsoftonline.de",
-}
-
-func getLoginUrl(endpoint string) (string, error) {
-	spRoot, err := url.Parse(endpoint)
-	if err != nil {
-		return "", err
-	}
-	domains := strings.Split(spRoot.Host, ".")
-	tld := domains[len(domains)-1]
-	loginUrl, ok := loginUrlsMap[tld]
-	if !ok {
-		return "", fmt.Errorf("tld %s is not supported", tld)
-	}
-	return loginUrl + "/extSTS.srf", nil
-}
-
-func (ca *CookieAuth) getSPToken() (*SuccessResponse, error) {
-	loginUrl, err := getLoginUrl(ca.endpoint)
-	if err != nil {
-		return nil, err
-	}
-	reqData := map[string]string{
-		"Username": ca.user,
-		"Password": ca.pass,
-		"Address":  ca.endpoint,
-		"LoginUrl": loginUrl,
-	}
-
-	t := template.Must(template.New("authXML").Parse(reqString))
-
-	buf := &bytes.Buffer{}
-	if err := t.Execute(buf, reqData); err != nil {
-		return nil, err
-	}
-
-	// Execute the first request which gives us an auth token for the sharepoint service
-	// With this token we can authenticate on the login page and save the returned cookies
-	req, err := http.NewRequest(http.MethodPost, loginUrl, buf)
+// GetAccessToken obtiene un token OAuth2 usando el flujo ROPC
+func (ca *CookieAuth) GetAccessToken() (*TokenResponse, error) {
+	resource, err := ca.getResourceURL()
 	if err != nil {
 		return nil, err
 	}
 
-	client := base.HttpClient
+	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", ca.tenantID)
+
+	data := url.Values{}
+	data.Set("client_id", "d3590ed6-52b3-4102-aeff-aad2292ab01c") // Microsoft Office client ID
+	data.Set("scope", resource+"/.default openid profile offline_access")
+	data.Set("username", ca.user)
+	data.Set("password", ca.pass)
+	data.Set("grant_type", "password")
+
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("error creando request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error ejecutando request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		return nil, fmt.Errorf("error de autenticación (status %d): %v", resp.StatusCode, errResp)
+	}
+
+	var tokenResp TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, fmt.Errorf("error parseando respuesta: %w", err)
+	}
+
+	// Calcular tiempo de expiración
+	tokenResp.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	return &tokenResp, nil
+}
+
+// RefreshAccessToken refresca un token usando el refresh_token
+func (ca *CookieAuth) RefreshAccessToken(refreshToken string) (*TokenResponse, error) {
+	resource, err := ca.getResourceURL()
+	if err != nil {
+		return nil, err
+	}
+
+	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", ca.tenantID)
+
+	data := url.Values{}
+	data.Set("client_id", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
+	data.Set("scope", resource+"/.default openid profile offline_access")
+	data.Set("refresh_token", refreshToken)
+	data.Set("grant_type", "refresh_token")
+
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("error creando request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error ejecutando request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		return nil, fmt.Errorf("error refrescando token (status %d): %v", resp.StatusCode, errResp)
+	}
+
+	var tokenResp TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, fmt.Errorf("error parseando respuesta: %w", err)
+	}
+
+	tokenResp.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	return &tokenResp, nil
+}
+
+// getResourceURL determina el recurso correcto basado en el endpoint
+func (ca *CookieAuth) getResourceURL() (string, error) {
+	parsedURL, err := url.Parse(ca.endpoint)
+	if err != nil {
+		return "", fmt.Errorf("error parseando endpoint: %w", err)
+	}
+
+	host := parsedURL.Host
+	
+	if strings.HasSuffix(host, ".sharepoint.com") {
+		return "https://" + strings.Split(host, ".")[0] + ".sharepoint.com", nil
+	} else if strings.HasSuffix(host, ".sharepoint.cn") {
+		return "https://" + strings.Split(host, ".")[0] + ".sharepoint.cn", nil
+	} else if strings.HasSuffix(host, ".sharepoint.us") {
+		return "https://" + strings.Split(host, ".")[0] + ".sharepoint.us", nil
+	} else if strings.HasSuffix(host, ".sharepoint.de") {
+		return "https://" + strings.Split(host, ".")[0] + ".sharepoint.de", nil
+	}
+
+	return "https://" + host, nil
+}
+
+// GetGraphToken obtiene token para Microsoft Graph API
+func (ca *CookieAuth) GetGraphToken() (*TokenResponse, error) {
+	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", ca.tenantID)
+
+	data := url.Values{}
+	data.Set("client_id", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
+	data.Set("scope", "https://graph.microsoft.com/.default")
+	data.Set("username", ca.user)
+	data.Set("password", ca.pass)
+	data.Set("grant_type", "password")
+
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	respBuf := bytes.Buffer{}
-	respBuf.ReadFrom(resp.Body)
-	s := respBuf.Bytes()
+	if resp.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		return nil, fmt.Errorf("error status %d: %s", resp.StatusCode, buf.String())
+	}
 
-	var conf SuccessResponse
-	err = xml.Unmarshal(s, &conf)
-	if err != nil {
+	var tokenResp TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		return nil, err
 	}
 
-	return &conf, err
+	tokenResp.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	return &tokenResp, nil
 }
