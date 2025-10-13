@@ -58,6 +58,11 @@ func (ca *CookieAuth) GetAccessToken() (*TokenResponse, error) {
 
 	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", ca.tenantID)
 
+	// Log para debugging
+	fmt.Printf("[DEBUG] Tenant ID: %s\n", ca.tenantID)
+	fmt.Printf("[DEBUG] Resource: %s\n", resource)
+	fmt.Printf("[DEBUG] Token URL: %s\n", tokenURL)
+
 	data := url.Values{}
 	data.Set("client_id", "d3590ed6-52b3-4102-aeff-aad2292ab01c") // Microsoft Office client ID
 	data.Set("scope", resource+"/.default openid profile offline_access")
@@ -82,6 +87,7 @@ func (ca *CookieAuth) GetAccessToken() (*TokenResponse, error) {
 	if resp.StatusCode != http.StatusOK {
 		var errResp map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&errResp)
+		fmt.Printf("[DEBUG] Error response: %+v\n", errResp)
 		return nil, fmt.Errorf("error de autenticación (status %d): %v", resp.StatusCode, errResp)
 	}
 
@@ -92,6 +98,8 @@ func (ca *CookieAuth) GetAccessToken() (*TokenResponse, error) {
 
 	// Calcular tiempo de expiración
 	tokenResp.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	
+	fmt.Printf("[DEBUG] Token obtenido exitosamente, expira en: %d segundos\n", tokenResp.ExpiresIn)
 
 	return &tokenResp, nil
 }
