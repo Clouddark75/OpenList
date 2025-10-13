@@ -24,7 +24,16 @@ func (d *WebDav) setClient() error {
 	})
 	if d.isSharepoint() {
 		// GetCookie ahora retorna "Bearer {token}" en lugar de cookies
-		authHeader, err := odrvcookie.GetCookie(d.Username, d.Password, d.Address)
+		// Soporta tenant ID específico si está configurado
+		var authHeader string
+		var err error
+		
+		if d.TenantID != "" {
+			authHeader, err = odrvcookie.GetCookieWithTenant(d.Username, d.Password, d.Address, d.TenantID)
+		} else {
+			authHeader, err = odrvcookie.GetCookie(d.Username, d.Password, d.Address)
+		}
+		
 		if err == nil {
 			c.SetInterceptor(func(method string, rq *http.Request) {
 				// Eliminar autenticación básica
