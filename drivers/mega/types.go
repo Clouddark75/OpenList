@@ -6,7 +6,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/t3rm1n4l/go-mega"
+	"github.com/Clouddark75/go-mega"
 )
 
 type MegaNode struct {
