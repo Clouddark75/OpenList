@@ -50,11 +50,13 @@ func GetCookieWithTenant(username, password, siteUrl, tenantID string) (string, 
 	
 	// Si existe y no ha expirado, usar el token en caché
 	if exists && !cachedToken.IsExpired() {
+		fmt.Println("[DEBUG] Usando token del caché")
 		return fmt.Sprintf("Bearer %s", cachedToken.AccessToken), nil
 	}
 	
 	// Si existe pero expiró, intentar refrescar
 	if exists && cachedToken.RefreshToken != "" {
+		fmt.Println("[DEBUG] Token expirado, intentando refresh...")
 		ca := NewWithTenant(username, password, siteUrl, tenantID)
 		newToken, err := ca.RefreshAccessToken(cachedToken.RefreshToken)
 		if err == nil {
@@ -62,15 +64,20 @@ func GetCookieWithTenant(username, password, siteUrl, tenantID string) (string, 
 			tokenCache.Lock()
 			tokenCache.tokens[cacheKey] = newToken
 			tokenCache.Unlock()
+			fmt.Println("[DEBUG] Token refrescado exitosamente")
 			return fmt.Sprintf("Bearer %s", newToken.AccessToken), nil
 		}
+		fmt.Printf("[DEBUG] Refresh falló: %v\n", err)
 		// Si el refresh falló, continuar para obtener token nuevo
 	}
 	
 	// Intentar ROPC primero (funciona si no hay MFA)
+	fmt.Println("[DEBUG] Intentando autenticación ROPC...")
 	ca := NewWithTenant(username, password, siteUrl, tenantID)
 	token, err := ca.GetAccessToken()
 	if err != nil {
+		fmt.Printf("[DEBUG] ROPC falló: %v\n", err)
+		fmt.Println("[DEBUG] Fallback a Device Flow...")
 		// ROPC falló (probablemente MFA o bloqueado por políticas)
 		// Fallback a Device Flow
 		return GetCookieInteractive(siteUrl, nil)
@@ -81,6 +88,7 @@ func GetCookieWithTenant(username, password, siteUrl, tenantID string) (string, 
 	tokenCache.tokens[cacheKey] = token
 	tokenCache.Unlock()
 	
+	fmt.Println("[DEBUG] Token ROPC obtenido exitosamente")
 	return fmt.Sprintf("Bearer %s", token.AccessToken), nil
 }
 
