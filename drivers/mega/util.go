@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"github.com/t3rm1n4l/go-mega"
+	"github.com/Clouddark75/go-mega"
 )
 
 // do others that not defined in Driver interface
