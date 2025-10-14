@@ -20,23 +20,32 @@ type CookieAuth struct {
 
 // TokenResponse respuesta del token OAuth2
 type TokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   string `json:"expires_in"` // Viene como string a veces
+	AccessToken string      `json:"access_token"`
+	TokenType   string      `json:"token_type"`
+	ExpiresIn   interface{} `json:"expires_in"` // Puede ser string o int
 }
 
-// GetExpiresInSeconds convierte expires_in a int
+// GetExpiresInSeconds convierte expires_in a int (maneja string o int)
 func (t *TokenResponse) GetExpiresInSeconds() int {
-	if t.ExpiresIn == "" {
+	if t.ExpiresIn == nil {
 		return 3600 // Default 1 hora
 	}
-	// Intentar convertir a int
-	var seconds int
-	fmt.Sscanf(t.ExpiresIn, "%d", &seconds)
-	if seconds <= 0 {
-		return 3600
+	
+	// Intentar como int
+	if val, ok := t.ExpiresIn.(float64); ok {
+		return int(val)
 	}
-	return seconds
+	
+	// Intentar como string
+	if val, ok := t.ExpiresIn.(string); ok {
+		var seconds int
+		fmt.Sscanf(val, "%d", &seconds)
+		if seconds > 0 {
+			return seconds
+		}
+	}
+	
+	return 3600 // Default
 }
 
 // New crea una instancia de CookieAuth
