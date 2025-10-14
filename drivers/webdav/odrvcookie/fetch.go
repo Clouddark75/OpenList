@@ -15,6 +15,7 @@ type CookieAuth struct {
 	user     string
 	pass     string
 	endpoint string
+	tenantID string
 }
 
 // TokenResponse respuesta del token OAuth2
@@ -34,10 +35,21 @@ type RenderListDataResponse struct {
 
 // New crea una instancia de CookieAuth
 func New(pUser, pPass, pEndpoint string) CookieAuth {
+	return NewWithTenant(pUser, pPass, pEndpoint, "")
+}
+
+// NewWithTenant crea una instancia con tenant ID específico
+func NewWithTenant(pUser, pPass, pEndpoint, pTenantID string) CookieAuth {
+	tenantID := pTenantID
+	if tenantID == "" {
+		tenantID = "common" // Default
+	}
+	
 	return CookieAuth{
 		user:     pUser,
 		pass:     pPass,
 		endpoint: pEndpoint,
+		tenantID: tenantID,
 	}
 }
 
@@ -51,8 +63,8 @@ func (ca *CookieAuth) GetAccessToken() (*TokenResponse, error) {
 	hostname := parsedURL.Host
 	resource := fmt.Sprintf("https://%s", hostname)
 	
-	// Usar OAuth v1 endpoint con /common
-	tokenURL := "https://login.microsoftonline.com/common/oauth2/token"
+	// Usar tenant específico o common
+	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/token", ca.tenantID)
 	
 	// Client ID de Microsoft Office
 	clientID := "d3590ed6-52b3-4102-aeff-aad2292ab01c"
