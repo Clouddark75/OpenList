@@ -123,15 +123,29 @@ func (ca *CookieAuth) GetDriveAccessToken() (string, error) {
 		return "", err
 	}
 	
-	// Construir URL de RenderListData
-	// Formato: https://tenant.sharepoint.com/sites/sitename/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream
+	// Construir el path para RenderListData
 	sitePath := parsedURL.Path
 	if sitePath == "" || sitePath == "/" {
-		sitePath = "/Shared Documents"
+		// Para OneDrive personal, usar /Documents por defecto
+		if strings.Contains(parsedURL.Host, "-my.sharepoint.com") {
+			// Extraer el username del host o path
+			// Formato: https://tenant-my.sharepoint.com/personal/user_domain/Documents
+			sitePath = "/Documents"
+		} else {
+			sitePath = "/Shared Documents"
+		}
 	}
 	
-	apiURL := fmt.Sprintf("%s://%s/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream?@a1='%s'",
-		parsedURL.Scheme, parsedURL.Host, url.QueryEscape(sitePath))
+	// Construir URL de RenderListData
+	apiURL := fmt.Sprintf("%s://%s/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream",
+		parsedURL.Scheme, parsedURL.Host)
+	
+	// Agregar parámetros de query
+	params := url.Values{}
+	params.Set("@a1", fmt.Sprintf("'%s'", sitePath))
+	params.Set("TryNewExperienceSingle", "TRUE")
+	
+	fullURL := apiURL + "?" + params.Encode()
 	
 	// Preparar el body con parámetros de renderizado
 	renderParams := map[string]interface{}{
@@ -146,7 +160,7 @@ func (ca *CookieAuth) GetDriveAccessToken() (string, error) {
 		return "", err
 	}
 	
-	req, err := http.NewRequest("POST", apiURL, strings.NewReader(string(bodyJSON)))
+	req, err := http.NewRequest("POST", fullURL, strings.NewReader(string(bodyJSON)))
 	if err != nil {
 		return "", err
 	}
