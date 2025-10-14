@@ -68,7 +68,7 @@ func NewWithTenant(pUser, pPass, pEndpoint, pTenantID string) CookieAuth {
 	}
 }
 
-// GetAccessToken obtiene el token usando ROPC con scope de Graph API
+// GetAccessToken obtiene el token usando ROPC
 func (ca *CookieAuth) GetAccessToken() (*TokenResponse, error) {
 	parsedURL, err := url.Parse(ca.endpoint)
 	if err != nil {
@@ -77,19 +77,18 @@ func (ca *CookieAuth) GetAccessToken() (*TokenResponse, error) {
 	
 	hostname := parsedURL.Host
 	
-	// Usar tenant específico o common
-	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", ca.tenantID)
+	// Usar OAuth v1 endpoint para mejor compatibilidad con WebDAV
+	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/token", ca.tenantID)
 	
 	// Client ID de Microsoft Office
 	clientID := "d3590ed6-52b3-4102-aeff-aad2292ab01c"
 	
-	// Construir el scope correcto para SharePoint
-	// Basado en el commit de rclone: usar el hostname de SharePoint como scope
-	scope := fmt.Sprintf("https://%s/.default offline_access", hostname)
+	// Usar 'resource' en lugar de 'scope' para OAuth v1
+	resource := fmt.Sprintf("https://%s", hostname)
 	
 	data := url.Values{}
 	data.Set("client_id", clientID)
-	data.Set("scope", scope)
+	data.Set("resource", resource)
 	data.Set("username", ca.user)
 	data.Set("password", ca.pass)
 	data.Set("grant_type", "password")
