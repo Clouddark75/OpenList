@@ -140,32 +140,21 @@ func (ca *CookieAuth) GetDriveAccessToken() (string, error) {
 	// Construir el path para RenderListData
 	sitePath := parsedURL.Path
 	
-	// Si no hay path o es solo "/", construir el path correcto
-	if sitePath == "" || sitePath == "/" {
-		// Para OneDrive personal, necesitamos extraer el path del usuario desde el host/URL
+	// Si el path ya viene en la URL, usarlo directamente
+	// Ej: https://tenant-my.sharepoint.com/personal/user/Documents -> /personal/user/Documents
+	// Ej: https://tenant.sharepoint.com/sites/sitename/Shared Documents -> /sites/sitename/Shared Documents
+	if sitePath != "" && sitePath != "/" {
+		// Ya tenemos el path completo, usarlo tal cual
+		// No hacer nada, sitePath ya está bien
+	} else {
+		// Si no hay path, intentar adivinar
 		if strings.Contains(parsedURL.Host, "-my.sharepoint.com") {
-			// Si el hostname tiene el patrón de OneDrive personal
-			// Intentar construir desde el email del usuario
-			username := ca.user
-			if strings.Contains(username, "@") {
-				// Convertir email a formato de path: user@domain.com -> user_domain_com
-				parts := strings.Split(username, "@")
-				localPart := parts[0]
-				domainPart := strings.ReplaceAll(parts[1], ".", "_")
-				userPath := fmt.Sprintf("%s_%s", localPart, domainPart)
-				sitePath = fmt.Sprintf("/personal/%s/Documents", userPath)
-			} else {
-				return "", fmt.Errorf("no se pudo determinar el path de OneDrive. Especifica la URL completa en Address")
-			}
+			// OneDrive personal - necesita el path completo
+			return "", fmt.Errorf("para OneDrive personal, especifica la URL completa incluyendo /personal/usuario/Documents")
 		} else {
-			// Para SharePoint de equipo
+			// SharePoint de equipo - usar default
 			sitePath = "/Shared Documents"
 		}
-	}
-	
-	// Si el path no termina en Documents, agregarlo
-	if !strings.Contains(sitePath, "Documents") {
-		sitePath = sitePath + "/Documents"
 	}
 	
 	// Construir URL de RenderListData
@@ -215,7 +204,8 @@ func (ca *CookieAuth) GetDriveAccessToken() (string, error) {
 	}
 	
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("error %d obteniendo driveAccessToken (path intentado: %s): %s", resp.StatusCode, sitePath, string(body))
+		return "", fmt.Errorf("error %d obteniendo driveAccessToken (URL: %s, path: %s): %s", 
+			resp.StatusCode, fullURL, sitePath, string(body))
 	}
 	
 	// Parsear respuesta para extraer .driveAccessToken
