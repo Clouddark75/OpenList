@@ -22,7 +22,21 @@ type CookieAuth struct {
 type TokenResponse struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
+	ExpiresIn   string `json:"expires_in"` // Viene como string a veces
+}
+
+// GetExpiresInSeconds convierte expires_in a int
+func (t *TokenResponse) GetExpiresInSeconds() int {
+	if t.ExpiresIn == "" {
+		return 3600 // Default 1 hora
+	}
+	// Intentar convertir a int
+	var seconds int
+	fmt.Sscanf(t.ExpiresIn, "%d", &seconds)
+	if seconds <= 0 {
+		return 3600
+	}
+	return seconds
 }
 
 // RenderListDataResponse respuesta de SharePoint con driveAccessToken
