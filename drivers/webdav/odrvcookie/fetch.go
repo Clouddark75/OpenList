@@ -1,213 +1,178 @@
 package odrvcookie
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
 
-// CookieAuth mantiene la información de autenticación
+// CookieAuth estructura simple de autenticación
 type CookieAuth struct {
 	user     string
 	pass     string
 	endpoint string
-	tenantID string
 }
 
-// New crea una nueva estructura CookieAuth
+// TokenResponse respuesta del token OAuth2
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+}
+
+// RenderListDataResponse respuesta de SharePoint con driveAccessToken
+type RenderListDataResponse struct {
+	ListData struct {
+		DriveAccessToken string `json:".driveAccessToken"`
+		DriveUrl         string `json:".driveUrl"`
+	} `json:"ListData"`
+}
+
+// New crea una instancia de CookieAuth
 func New(pUser, pPass, pEndpoint string) CookieAuth {
-	return NewWithTenant(pUser, pPass, pEndpoint, "")
-}
-
-// NewWithTenant crea una nueva estructura CookieAuth con tenant ID específico
-func NewWithTenant(pUser, pPass, pEndpoint, pTenantID string) CookieAuth {
-	tenantID := pTenantID
-	
-	// Si no se proporcionó tenant ID, intentar auto-detectar
-	if tenantID == "" {
-		// Intentar desde el email del usuario
-		if discoveredTenant, err := DiscoverTenantID(pUser); err == nil {
-			tenantID = discoveredTenant
-		} else if discoveredTenant, err := DiscoverTenantIDFromSharePoint(pEndpoint); err == nil {
-			// Si falla, intentar desde la URL de SharePoint
-			tenantID = discoveredTenant
-		} else {
-			// Default: organizations
-			tenantID = "organizations"
-		}
-	}
-	
 	return CookieAuth{
 		user:     pUser,
 		pass:     pPass,
 		endpoint: pEndpoint,
-		tenantID: tenantID,
 	}
 }
 
-// GetAccessToken obtiene un token OAuth2 usando el flujo ROPC
+// GetAccessToken obtiene el token usando ROPC
 func (ca *CookieAuth) GetAccessToken() (*TokenResponse, error) {
-	resource, err := ca.getResourceURL()
-	if err != nil {
-		return nil, err
-	}
-
-	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", ca.tenantID)
-
-	// Log para debugging
-	fmt.Printf("[DEBUG] Tenant ID: %s\n", ca.tenantID)
-	fmt.Printf("[DEBUG] Resource: %s\n", resource)
-	fmt.Printf("[DEBUG] Token URL: %s\n", tokenURL)
-
-	data := url.Values{}
-	data.Set("client_id", "d3590ed6-52b3-4102-aeff-aad2292ab01c") // Microsoft Office client ID
-	data.Set("scope", resource+"/.default openid profile offline_access")
-	data.Set("username", ca.user)
-	data.Set("password", ca.pass)
-	data.Set("grant_type", "password")
-
-	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("error creando request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error ejecutando request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		fmt.Printf("[DEBUG] Error response: %+v\n", errResp)
-		return nil, fmt.Errorf("error de autenticación (status %d): %v", resp.StatusCode, errResp)
-	}
-
-	var tokenResp TokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return nil, fmt.Errorf("error parseando respuesta: %w", err)
-	}
-
-	// Calcular tiempo de expiración
-	tokenResp.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-	
-	fmt.Printf("[DEBUG] Token obtenido exitosamente, expira en: %d segundos\n", tokenResp.ExpiresIn)
-
-	return &tokenResp, nil
-}
-
-// RefreshAccessToken refresca un token usando el refresh_token
-func (ca *CookieAuth) RefreshAccessToken(refreshToken string) (*TokenResponse, error) {
-	resource, err := ca.getResourceURL()
-	if err != nil {
-		return nil, err
-	}
-
-	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", ca.tenantID)
-
-	data := url.Values{}
-	data.Set("client_id", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
-	data.Set("scope", resource+"/.default openid profile offline_access")
-	data.Set("refresh_token", refreshToken)
-	data.Set("grant_type", "refresh_token")
-
-	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("error creando request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error ejecutando request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		return nil, fmt.Errorf("error refrescando token (status %d): %v", resp.StatusCode, errResp)
-	}
-
-	var tokenResp TokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return nil, fmt.Errorf("error parseando respuesta: %w", err)
-	}
-
-	tokenResp.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-
-	return &tokenResp, nil
-}
-
-// getResourceURL determina el recurso correcto basado en el endpoint
-func (ca *CookieAuth) getResourceURL() (string, error) {
 	parsedURL, err := url.Parse(ca.endpoint)
 	if err != nil {
-		return "", fmt.Errorf("error parseando endpoint: %w", err)
+		return nil, fmt.Errorf("URL inválida: %w", err)
 	}
-
-	host := parsedURL.Host
 	
-	if strings.HasSuffix(host, ".sharepoint.com") {
-		return "https://" + strings.Split(host, ".")[0] + ".sharepoint.com", nil
-	} else if strings.HasSuffix(host, ".sharepoint.cn") {
-		return "https://" + strings.Split(host, ".")[0] + ".sharepoint.cn", nil
-	} else if strings.HasSuffix(host, ".sharepoint.us") {
-		return "https://" + strings.Split(host, ".")[0] + ".sharepoint.us", nil
-	} else if strings.HasSuffix(host, ".sharepoint.de") {
-		return "https://" + strings.Split(host, ".")[0] + ".sharepoint.de", nil
-	}
-
-	return "https://" + host, nil
-}
-
-// GetGraphToken obtiene token para Microsoft Graph API
-func (ca *CookieAuth) GetGraphToken() (*TokenResponse, error) {
-	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", ca.tenantID)
-
+	hostname := parsedURL.Host
+	resource := fmt.Sprintf("https://%s", hostname)
+	
+	// Usar OAuth v1 endpoint con /common
+	tokenURL := "https://login.microsoftonline.com/common/oauth2/token"
+	
+	// Client ID de Microsoft Office
+	clientID := "d3590ed6-52b3-4102-aeff-aad2292ab01c"
+	
 	data := url.Values{}
-	data.Set("client_id", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
-	data.Set("scope", "https://graph.microsoft.com/.default")
+	data.Set("resource", resource)
+	data.Set("client_id", clientID)
+	data.Set("grant_type", "password")
 	data.Set("username", ca.user)
 	data.Set("password", ca.pass)
-	data.Set("grant_type", "password")
-
+	data.Set("scope", "openid")
+	
 	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, err
 	}
-
+	
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
+	
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		buf := new(bytes.Buffer)
-		buf.ReadFrom(resp.Body)
-		return nil, fmt.Errorf("error status %d: %s", resp.StatusCode, buf.String())
-	}
-
-	var tokenResp TokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
 	}
-
-	tokenResp.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("error %d: %s", resp.StatusCode, string(body))
+	}
+	
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("error parseando token: %w", err)
+	}
+	
 	return &tokenResp, nil
+}
+
+// GetDriveAccessToken obtiene el driveAccessToken específico para archivos
+// Este es el token que realmente necesitas para WebDAV/Graph API
+func (ca *CookieAuth) GetDriveAccessToken() (string, error) {
+	// Primero obtener el token OAuth2 base
+	baseToken, err := ca.GetAccessToken()
+	if err != nil {
+		return "", fmt.Errorf("error obteniendo token base: %w", err)
+	}
+	
+	// Extraer información del endpoint
+	parsedURL, err := url.Parse(ca.endpoint)
+	if err != nil {
+		return "", err
+	}
+	
+	// Construir URL de RenderListData
+	// Formato: https://tenant.sharepoint.com/sites/sitename/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream
+	sitePath := parsedURL.Path
+	if sitePath == "" || sitePath == "/" {
+		sitePath = "/Shared Documents"
+	}
+	
+	apiURL := fmt.Sprintf("%s://%s/_api/web/GetListUsingPath(DecodedUrl=@a1)/RenderListDataAsStream?@a1='%s'",
+		parsedURL.Scheme, parsedURL.Host, url.QueryEscape(sitePath))
+	
+	// Preparar el body con parámetros de renderizado
+	renderParams := map[string]interface{}{
+		"parameters": map[string]interface{}{
+			"RenderOptions": 64,
+			"ViewXml":       "<View><Query></Query></View>",
+		},
+	}
+	
+	bodyJSON, err := json.Marshal(renderParams)
+	if err != nil {
+		return "", err
+	}
+	
+	req, err := http.NewRequest("POST", apiURL, strings.NewReader(string(bodyJSON)))
+	if err != nil {
+		return "", err
+	}
+	
+	// Headers requeridos
+	req.Header.Set("Authorization", "Bearer "+baseToken.AccessToken)
+	req.Header.Set("Accept", "application/json;odata=verbose")
+	req.Header.Set("Content-Type", "application/json;odata=verbose")
+	
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("error %d obteniendo driveAccessToken: %s", resp.StatusCode, string(body))
+	}
+	
+	// Parsear respuesta para extraer .driveAccessToken
+	var renderResp RenderListDataResponse
+	if err := json.Unmarshal(body, &renderResp); err != nil {
+		return "", fmt.Errorf("error parseando RenderListData: %w", err)
+	}
+	
+	if renderResp.ListData.DriveAccessToken == "" {
+		return "", fmt.Errorf("driveAccessToken no encontrado en la respuesta")
+	}
+	
+	// El driveAccessToken viene como "access_token=XXX"
+	// Extraer solo el token
+	token := strings.TrimPrefix(renderResp.ListData.DriveAccessToken, "access_token=")
+	
+	return token, nil
 }
