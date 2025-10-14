@@ -139,15 +139,33 @@ func (ca *CookieAuth) GetDriveAccessToken() (string, error) {
 	
 	// Construir el path para RenderListData
 	sitePath := parsedURL.Path
+	
+	// Si no hay path o es solo "/", construir el path correcto
 	if sitePath == "" || sitePath == "/" {
-		// Para OneDrive personal, usar /Documents por defecto
+		// Para OneDrive personal, necesitamos extraer el path del usuario desde el host/URL
 		if strings.Contains(parsedURL.Host, "-my.sharepoint.com") {
-			// Extraer el username del host o path
-			// Formato: https://tenant-my.sharepoint.com/personal/user_domain/Documents
-			sitePath = "/Documents"
+			// Si el hostname tiene el patrón de OneDrive personal
+			// Intentar construir desde el email del usuario
+			username := ca.user
+			if strings.Contains(username, "@") {
+				// Convertir email a formato de path: user@domain.com -> user_domain_com
+				parts := strings.Split(username, "@")
+				localPart := parts[0]
+				domainPart := strings.ReplaceAll(parts[1], ".", "_")
+				userPath := fmt.Sprintf("%s_%s", localPart, domainPart)
+				sitePath = fmt.Sprintf("/personal/%s/Documents", userPath)
+			} else {
+				return "", fmt.Errorf("no se pudo determinar el path de OneDrive. Especifica la URL completa en Address")
+			}
 		} else {
+			// Para SharePoint de equipo
 			sitePath = "/Shared Documents"
 		}
+	}
+	
+	// Si el path no termina en Documents, agregarlo
+	if !strings.Contains(sitePath, "Documents") {
+		sitePath = sitePath + "/Documents"
 	}
 	
 	// Construir URL de RenderListData
@@ -197,7 +215,7 @@ func (ca *CookieAuth) GetDriveAccessToken() (string, error) {
 	}
 	
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("error %d obteniendo driveAccessToken: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("error %d obteniendo driveAccessToken (path intentado: %s): %s", resp.StatusCode, sitePath, string(body))
 	}
 	
 	// Parsear respuesta para extraer .driveAccessToken
