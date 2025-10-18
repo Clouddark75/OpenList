@@ -7,7 +7,7 @@ toolchain go1.24.5
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.18.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.2
-    github.com/Clouddark75/115driver v1.1.4
+	github.com/Clouddark75/115driver v1.1.4
 	github.com/OpenListTeam/go-cache v0.1.0
 	github.com/OpenListTeam/sftpd-openlist v1.0.1
 	github.com/OpenListTeam/tache v0.2.0
@@ -70,9 +70,9 @@ require (
 	github.com/winfsp/cgofuse v1.6.0
 	github.com/yeka/zip v0.0.0-20231116150916-03d6312748a9
 	github.com/zzzhr1990/go-common-entity v0.0.0-20250202070650-1a200048f0d3
-	golang.org/x/crypto v0.40.0
+	golang.org/x/crypto v0.42.0
 	golang.org/x/image v0.29.0
-	golang.org/x/net v0.42.0
+	golang.org/x/net v0.43.0
 	golang.org/x/oauth2 v0.30.0
 	golang.org/x/time v0.12.0
 	google.golang.org/appengine v1.6.8
@@ -197,7 +197,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.3 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-    github.com/google/go-cmp v0.6.0 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-tpm v0.9.5 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
@@ -271,13 +271,13 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.etcd.io/bbolt v1.4.0 // indirect
 	golang.org/x/arch v0.18.0 // indirect
-	golang.org/x/sync v0.16.0
-	golang.org/x/sys v0.34.0
-    golang.org/x/telemetry v0.0.0-20250807160809-1a19826ec488 // indirect
-	golang.org/x/term v0.33.0 // indirect
-	golang.org/x/text v0.27.0
-	golang.org/x/tools v0.35.0 // indirect
-    golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7 // indirect
+	golang.org/x/sync v0.17.0
+	golang.org/x/sys v0.36.0
+	golang.org/x/telemetry v0.0.0-20250807160809-1a19826ec488 // indirect
+	golang.org/x/term v0.35.0 // indirect
+	golang.org/x/text v0.29.0
+	golang.org/x/tools v0.36.0 // indirect
+	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/grpc v1.73.0
 	google.golang.org/protobuf v1.36.6 // indirect
