@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math"
 	stdpath "path"
 	"strconv"
 	"sync"
@@ -297,7 +296,7 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	}
 
 	chunkSize := calculateChunkSize(streamSize)
-	count := int(math.Ceil(float64(streamSize) / float64(chunkSize)))
+	count := int((streamSize + chunkSize - 1) / chunkSize) // cálculo entero más eficiente
 	
 	// Get upload threads setting with default value of 2
 	uploadThreads := d.UploadThreads
