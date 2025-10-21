@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math"
 	stdpath "path"
 	"strconv"
 	"sync"
