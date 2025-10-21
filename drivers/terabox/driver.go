@@ -529,7 +529,6 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 			TotalSpace: total,
 			FreeSpace:  free,
 		},
-    Remark: fmt.Sprintf("%d GB / %d GB",usedGiB, totalGiB),
 	}, nil
 }
 var _ driver.Driver = (*Terabox)(nil)
