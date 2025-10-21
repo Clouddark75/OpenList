@@ -526,9 +526,7 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 	free := total - used
 	
 	return &model.StorageDetails{
-		DiskUsage: model.DiskUsage{
-			TotalSpace: total,
-			FreeSpace:  free,
+		DiskUsage: *model.NewDiskUsageFromUsedAndTotal(used, total),
 		},
 	}, nil
 }
