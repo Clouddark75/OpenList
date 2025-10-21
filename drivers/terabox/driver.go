@@ -517,12 +517,12 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 	
 	// Convert to GiB and round, then convert back to bytes
 	// This matches Terabox's web interface display
-	const gib = uint64(1024 * 1024 * 1024)
-	totalGiB := (quotaResp.Total + int64(gib/2)) / int64(gib)
-	usedGiB := (quotaResp.Used + int64(gib/2)) / int64(gib)
+	const gb = uint64(1000 * 1000 * 1000)
+	totalGB := (quotaResp.Total + int64(gb/2)) / int64(gb)
+	usedGB := (quotaResp.Used + int64(gb/2)) / int64(gb)
 	
-	total := uint64(totalGiB) * gib
-	used := uint64(usedGiB) * gib
+	total := uint64(totalGB) * gb
+	used := uint64(usedGB) * gb
 	free := total - used
 	
 	return &model.StorageDetails{
