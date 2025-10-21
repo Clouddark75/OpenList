@@ -504,4 +504,27 @@ func (d *Terabox) getRetryCount() int {
 	return d.RetryCount
 }
 
+func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	var quotaResp QuotaResp
+	_, err := d.get("/api/quota", nil, &quotaResp)
+	if err != nil {
+		return nil, err
+	}
+	
+	if quotaResp.Errno != 0 {
+		return nil, fmt.Errorf("[terabox] failed to get quota, errno: %d", quotaResp.Errno)
+	}
+	
+	total := uint64(quotaResp.Total)
+	used := uint64(quotaResp.Used)
+	free := total - used
+	
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			FreeSpace:  free,
+		},
+	}, nil
+}
+
 var _ driver.Driver = (*Terabox)(nil)
