@@ -515,16 +515,16 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 		return nil, fmt.Errorf("[terabox] failed to get quota, errno: %d", quotaResp.Errno)
 	}
 	
-	// Convert to GiB and round, then convert back to bytes
-	// This matches Terabox's web interface display
-	const gib = uint64(1024 * 1024 * 1024)
-	totalGiB := (uint64(quotaResp.Total) + gib/2) / gib
-	usedGiB := (uint64(quotaResp.Used) + gib/2) / gib
+	// Match Terabox's display by rounding to nearest TB
+	// 2173253451776 bytes should display as 2.0 TB (like Terabox shows 2024)
+	const tb = uint64(1000 * 1000 * 1000 * 1000) // 1 TB in bytes (base 1000)
 	
-	// Convert back to bytes using GB (base 1000) to match standard display
-	const gb = uint64(1000 * 1000 * 1000)
-	total := totalGiB * gb
-	used := usedGiB * gb
+	// Round to nearest TB
+	totalTB := (uint64(quotaResp.Total) + tb/2) / tb
+	usedTB := (uint64(quotaResp.Used) + tb/2) / tb
+	
+	total := totalTB * tb
+	used := usedTB * tb
 	free := total - used
 	
 	return &model.StorageDetails{
