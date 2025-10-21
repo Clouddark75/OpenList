@@ -146,9 +146,16 @@ type JsTokenResp struct {
 
 // QuotaResp represents the response for quota/space information
 type QuotaResp struct {
-	Errno int `json:"errno"`
-	Quota int64 `json:"quota"`
-	Used  int64 `json:"used"`
+	Errno      int    `json:"errno"`
+	Errmsg     string `json:"errmsg"`
+	Total      int64  `json:"total"`
+	Used       int64  `json:"used"`
+	Free       int64  `json:"free"`
+	Expire     bool   `json:"expire"`
+	SboxUsed   int64  `json:"sbox_used"`
+	ServerTime int64  `json:"server_time"`
+	//RequestId  int64  `json:"request_id"` // Comentado ya que puede variar
+	//Newno      string `json:"newno"`
 }
 
 // UserInfoResp represents user information response
