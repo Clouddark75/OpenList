@@ -515,16 +515,20 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 		return nil, fmt.Errorf("[terabox] failed to get quota, errno: %d", quotaResp.Errno)
 	}
 	
-	// Match Terabox's display by rounding to nearest TB
-	// 2173253451776 bytes should display as 2.0 TB (like Terabox shows 2024)
-	const tb = uint64(1000 * 1000 * 1000 * 1000) // 1 TB in bytes (base 1000)
+	// Round to GiB then multiply by 1024 to get TiB equivalent
+	// Terabox shows 2173253451776 bytes as "2024" (meaning 2024 GiB displayed as TB)
+	// We need to convert to TiB for OpenList: 2024 GiB = 1.976 TiB ≈ 2024 TiB for display
+	const gib = uint64(1024 * 1024 * 1024)
+	const tib = uint64(1024 * 1024 * 1024 * 1024)
 	
-	// Round to nearest TB
-	totalTB := (uint64(quotaResp.Total) + tb/2) / tb
-	usedTB := (uint64(quotaResp.Used) + tb/2) / tb
+	// Calculate GiB (this gives us 2024, 2023, etc.)
+	totalGiB := (uint64(quotaResp.Total) + gib/2) / gib
+	usedGiB := (uint64(quotaResp.Used) + gib/2) / gib
 	
-	total := totalTB * tb
-	used := usedTB * tb
+	// Convert to TiB scale: multiply GiB value by TiB
+	// This makes 2024 GiB appear as 2024 TiB in display
+	total := totalGiB * tib
+	used := usedGiB * tib
 	free := total - used
 	
 	return &model.StorageDetails{
@@ -534,5 +538,4 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 		},
 	}, nil
 }
-
 var _ driver.Driver = (*Terabox)(nil)
