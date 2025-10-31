@@ -132,7 +132,7 @@ func (d *Terabox) request(rurl string, method string, callback base.ReqCallback,
 			
 			// Handle specific error codes
 			switch errno {
-			case 4000023, 450016: // jsToken related errors
+			case 4000023, 45016: // jsToken related errors
 				if !jsTokenRefreshed && !utils.IsBool(noRetry...) {
 					log.Debugf("jsToken error (errno: %d), refreshing token", errno)
 					tokenErr := d.resetJsToken()
