@@ -523,11 +523,3 @@ func Link(c *gin.Context) {
 	defer link.Close()
 	common.SuccessResp(c, link)
 }
-
-func getTaskInfos(tasks []task.TaskExtensionInfo) []interface{} {
-	infos := make([]interface{}, len(tasks))
-	for i, t := range tasks {
-		infos[i] = t
-	}
-	return infos
-}
