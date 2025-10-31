@@ -64,6 +64,86 @@ type MoveCopyReq struct {
 	SkipExisting bool     `json:"skipExisting"`
 }
 
+// Función auxiliar para obtener los nombres válidos con merge recursivo
+func getValidNamesWithMerge(ctx context.Context, srcDir, dstDir string, names []string, overwrite, skipExisting bool) ([]string, error) {
+	if overwrite {
+		return names, nil
+	}
+
+	var validNames []string
+	for _, name := range names {
+		dstPath := stdpath.Join(dstDir, name)
+		srcPath := stdpath.Join(srcDir, name)
+		
+		dstObj, _ := fs.Get(ctx, dstPath, &fs.GetArgs{NoLog: true})
+		
+		if dstObj != nil {
+			if !skipExisting {
+				return nil, fmt.Errorf("file [%s] exists", name)
+			}
+			
+			// Si skipExisting está activado y el destino existe
+			srcObj, err := fs.Get(ctx, srcPath, &fs.GetArgs{NoLog: true})
+			if err != nil {
+				continue
+			}
+			
+			// Si ambos son directorios, necesitamos hacer merge recursivo
+			if srcObj.IsDir() && dstObj.IsDir() {
+				// Agregamos este directorio para procesamiento recursivo
+				validNames = append(validNames, name)
+			}
+			// Si es un archivo y existe, lo saltamos (no lo agregamos a validNames)
+		} else {
+			// El destino no existe, lo agregamos
+			validNames = append(validNames, name)
+		}
+	}
+	
+	return validNames, nil
+}
+
+// Función para procesar recursivamente las carpetas con merge
+func processFolderMerge(ctx context.Context, srcPath, dstPath string, operation string) error {
+	// Listar contenido de la carpeta origen
+	srcFiles, err := fs.List(ctx, srcPath, &fs.ListArgs{})
+	if err != nil {
+		return err
+	}
+	
+	for _, srcFile := range srcFiles {
+		srcFilePath := stdpath.Join(srcPath, srcFile.GetName())
+		dstFilePath := stdpath.Join(dstPath, srcFile.GetName())
+		
+		dstFileObj, _ := fs.Get(ctx, dstFilePath, &fs.GetArgs{NoLog: true})
+		
+		if dstFileObj != nil {
+			// El archivo/carpeta ya existe en el destino
+			if srcFile.IsDir() && dstFileObj.IsDir() {
+				// Ambos son directorios, hacer merge recursivo
+				err = processFolderMerge(ctx, srcFilePath, dstFilePath, operation)
+				if err != nil {
+					return err
+				}
+			}
+			// Si es un archivo que ya existe, lo saltamos
+		} else {
+			// El archivo/carpeta no existe en el destino, lo copiamos/movemos
+			if operation == "copy" {
+				_, err = fs.Copy(ctx, srcFilePath, dstPath, false)
+			} else if operation == "move" {
+				_, err = fs.Move(ctx, srcFilePath, dstPath, false)
+			}
+			
+			if err != nil {
+				return err
+			}
+		}
+	}
+	
+	return nil
+}
+
 func FsMove(c *gin.Context) {
 	var req MoveCopyReq
 	if err := c.ShouldBind(&req); err != nil {
@@ -90,25 +170,41 @@ func FsMove(c *gin.Context) {
 		return
 	}
 
-	var validNames []string
-	if !req.Overwrite {
-		for _, name := range req.Names {
-			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, name), &fs.GetArgs{NoLog: true}); res != nil && !req.SkipExisting {
-				common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
-				return
-			} else if res == nil {
-				validNames = append(validNames, name)
-			}
-		}
-	} else {
-		validNames = req.Names
+	validNames, err := getValidNamesWithMerge(c.Request.Context(), srcDir, dstDir, req.Names, req.Overwrite, req.SkipExisting)
+	if err != nil {
+		common.ErrorStrResp(c, err.Error(), 403)
+		return
 	}
 
-	// Create all tasks immediately without any synchronous validation
-	// All validation will be done asynchronously in the background
 	var addedTasks []task.TaskExtensionInfo
+	
+	// Procesar cada archivo/carpeta
 	for i, name := range validNames {
-		t, err := fs.Move(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
+		srcPath := stdpath.Join(srcDir, name)
+		dstPath := stdpath.Join(dstDir, name)
+		
+		srcObj, err := fs.Get(c.Request.Context(), srcPath, &fs.GetArgs{NoLog: true})
+		if err != nil {
+			common.ErrorResp(c, err, 500)
+			return
+		}
+		
+		dstObj, _ := fs.Get(c.Request.Context(), dstPath, &fs.GetArgs{NoLog: true})
+		
+		// Si ambos son directorios y skipExisting está activado, hacer merge
+		if req.SkipExisting && srcObj.IsDir() && dstObj != nil && dstObj.IsDir() {
+			err = processFolderMerge(c.Request.Context(), srcPath, dstPath, "move")
+			if err != nil {
+				common.ErrorResp(c, err, 500)
+				return
+			}
+			// Después del merge, remover la carpeta origen si está vacía
+			// (opcional, dependiendo del comportamiento deseado)
+			continue
+		}
+		
+		// Operación normal de move
+		t, err := fs.Move(c.Request.Context(), srcPath, dstDir, len(validNames) > i+1)
 		if t != nil {
 			addedTasks = append(addedTasks, t)
 		}
@@ -118,7 +214,6 @@ func FsMove(c *gin.Context) {
 		}
 	}
 
-	// Return immediately with task information
 	if len(addedTasks) > 0 {
 		common.SuccessResp(c, gin.H{
 			"message": fmt.Sprintf("Successfully created %d move task(s)", len(addedTasks)),
@@ -157,25 +252,39 @@ func FsCopy(c *gin.Context) {
 		return
 	}
 
-	var validNames []string
-	if !req.Overwrite {
-		for _, name := range req.Names {
-			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, name), &fs.GetArgs{NoLog: true}); res != nil && !req.SkipExisting {
-				common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
-				return
-			} else if res == nil {
-				validNames = append(validNames, name)
-			}
-		}
-	} else {
-		validNames = req.Names
+	validNames, err := getValidNamesWithMerge(c.Request.Context(), srcDir, dstDir, req.Names, req.Overwrite, req.SkipExisting)
+	if err != nil {
+		common.ErrorStrResp(c, err.Error(), 403)
+		return
 	}
 
-	// Create all tasks immediately without any synchronous validation
-	// All validation will be done asynchronously in the background
 	var addedTasks []task.TaskExtensionInfo
+	
+	// Procesar cada archivo/carpeta
 	for i, name := range validNames {
-		t, err := fs.Copy(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
+		srcPath := stdpath.Join(srcDir, name)
+		dstPath := stdpath.Join(dstDir, name)
+		
+		srcObj, err := fs.Get(c.Request.Context(), srcPath, &fs.GetArgs{NoLog: true})
+		if err != nil {
+			common.ErrorResp(c, err, 500)
+			return
+		}
+		
+		dstObj, _ := fs.Get(c.Request.Context(), dstPath, &fs.GetArgs{NoLog: true})
+		
+		// Si ambos son directorios y skipExisting está activado, hacer merge
+		if req.SkipExisting && srcObj.IsDir() && dstObj != nil && dstObj.IsDir() {
+			err = processFolderMerge(c.Request.Context(), srcPath, dstPath, "copy")
+			if err != nil {
+				common.ErrorResp(c, err, 500)
+				return
+			}
+			continue
+		}
+		
+		// Operación normal de copy
+		t, err := fs.Copy(c.Request.Context(), srcPath, dstDir, len(validNames) > i+1)
 		if t != nil {
 			addedTasks = append(addedTasks, t)
 		}
@@ -185,7 +294,6 @@ func FsCopy(c *gin.Context) {
 		}
 	}
 
-	// Return immediately with task information
 	if len(addedTasks) > 0 {
 		common.SuccessResp(c, gin.H{
 			"message": fmt.Sprintf("Successfully created %d copy task(s)", len(addedTasks)),
