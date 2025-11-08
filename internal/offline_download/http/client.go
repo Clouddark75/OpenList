@@ -25,9 +25,7 @@ const (
 	ChunkSize = 64 * 1024 // 64KB
 )
 
-type SimpleHttp struct {
-	client http.Client
-}
+type SimpleHttp struct{}
 
 func (s SimpleHttp) Name() string {
 	return "SimpleHttp"
@@ -58,8 +56,13 @@ func (s SimpleHttp) Status(task *tool.DownloadTask) (*tool.Status, error) {
 }
 
 func (s SimpleHttp) Run(task *tool.DownloadTask) error {
+	// Crear cliente HTTP local para esta descarga
+	client := &http.Client{}
+	
 	streamPut := task.DeletePolicy == tool.UploadDownloadStream
 	method := http.MethodGet
+	
+	// Para streaming, primero hacemos HEAD para obtener metadata
 	if streamPut {
 		method = http.MethodHead
 	}
@@ -73,7 +76,7 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 		req.Header.Set("Range", "bytes=0-")
 	}
 
-	resp, err := s.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -99,14 +102,96 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 			fileSize = start + end
 		}
 		task.SetTotalBytes(fileSize)
+		
+		// En lugar de solo retornar, ahora descargamos con optimización
+		// Guardamos el filename para que Transfer lo use
 		task.TempDir = filename
+		
+		// Si el archivo es pequeño (≤ 5GB), lo descargamos en memoria primero
+		// y lo escribimos a un archivo temporal que TransferTask usará
+		if fileSize > 0 && fileSize <= InMemoryMaxSize {
+			return s.downloadToTempForStreaming(task, client, filename, fileSize)
+		}
+		
+		// Si es muy grande, dejamos que TransferTask lo maneje con streaming directo
 		return nil
 	}
 
 	task.SetTotalBytes(fileSize)
 
-	// Nueva lógica híbrida (descarga adaptativa)
+	// Descarga normal (no streaming)
 	return s.downloadAdaptive(task, resp.Body, filename, fileSize)
+}
+
+// downloadToTempForStreaming descarga en memoria y guarda a temp para que TransferTask lo use
+func (s SimpleHttp) downloadToTempForStreaming(task *tool.DownloadTask, client *http.Client, filename string, fileSize int64) error {
+	// Hacer el GET request real
+	req, err := http.NewRequestWithContext(task.Ctx(), http.MethodGet, task.Url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", base.UserAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("http status code %d", resp.StatusCode)
+	}
+
+	// Descargar en memoria
+	buffer := bytes.NewBuffer(make([]byte, 0, fileSize))
+	
+	chunk := make([]byte, ChunkSize)
+	progress := int64(0)
+
+	for {
+		// Verificar cancelación
+		select {
+		case <-task.Ctx().Done():
+			return task.Ctx().Err()
+		default:
+		}
+
+		n, err := resp.Body.Read(chunk)
+		if n > 0 {
+			progress += int64(n)
+			buffer.Write(chunk[:n])
+			
+			if fileSize > 0 {
+				task.SetProgress(float64(progress))
+			}
+		}
+
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error durante la lectura HTTP: %w", err)
+		}
+	}
+
+	// Crear directorio temporal
+	if err := os.MkdirAll(task.TempDir, os.ModePerm); err != nil {
+		return fmt.Errorf("no se pudo crear directorio temporal: %w", err)
+	}
+
+	// Escribir a archivo temporal que TransferTask usará
+	filePath := filepath.Join(task.TempDir, filename)
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("no se pudo crear archivo temporal: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(file, buffer); err != nil {
+		return fmt.Errorf("error al escribir desde memoria: %w", err)
+	}
+
+	return nil
 }
 
 // downloadAdaptive descarga primero en memoria, y si se supera el límite definido,
