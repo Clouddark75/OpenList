@@ -2,7 +2,6 @@ package http
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -89,7 +88,7 @@ func initMemoryServer() {
 			key := strings.TrimPrefix(r.URL.Path, "/")
 			
 			memoryCacheMu.RLock()
-			buffer, exists := memoryCache[key]
+			memFile, exists := memoryCache[key]
 			memoryCacheMu.RUnlock()
 			
 			if !exists {
@@ -97,11 +96,29 @@ func initMemoryServer() {
 				return
 			}
 			
+			// Actualizar último acceso y contador
+			memFile.mu.Lock()
+			memFile.accessed = time.Now()
+			memFile.readCount++
+			isComplete := memFile.readCount >= 1 // Después de primera lectura completa
+			memFile.mu.Unlock()
+			
 			// Crear reader desde el buffer
-			reader := bytes.NewReader(buffer.Bytes())
+			reader := bytes.NewReader(memFile.buffer.Bytes())
 			
 			// Soporte para Range requests
 			http.ServeContent(w, r, key, time.Now(), reader)
+			
+			// Si ya se leyó completamente, programar limpieza inmediata
+			if isComplete {
+				go func() {
+					// Esperar 5 segundos para asegurar que la lectura terminó
+					time.Sleep(5 * time.Second)
+					memoryCacheMu.Lock()
+					delete(memoryCache, key)
+					memoryCacheMu.Unlock()
+				}()
+			}
 		})
 		
 		memoryServer = &http.Server{
@@ -109,6 +126,25 @@ func initMemoryServer() {
 		}
 		
 		go memoryServer.Serve(listener)
+		
+		// Limpiador de archivos antiguos (por si acaso)
+		go func() {
+			ticker := time.NewTicker(1 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				memoryCacheMu.Lock()
+				now := time.Now()
+				for key, memFile := range memoryCache {
+					memFile.mu.Lock()
+					// Eliminar si no se ha accedido en 5 minutos
+					if now.Sub(memFile.accessed) > 5*time.Minute {
+						delete(memoryCache, key)
+					}
+					memFile.mu.Unlock()
+				}
+				memoryCacheMu.Unlock()
+			}
+		}()
 	})
 }
 
@@ -237,17 +273,12 @@ func (s SimpleHttp) downloadToMemoryForStreaming(task *tool.DownloadTask, client
 	
 	// Almacenar en memoria
 	memoryCacheMu.Lock()
-	memoryCache[cacheKey] = buffer
+	memoryCache[cacheKey] = &memoryFile{
+		buffer:    buffer,
+		accessed:  time.Now(),
+		readCount: 0,
+	}
 	memoryCacheMu.Unlock()
-	
-	// Limpiar después de que se complete o falle la tarea
-	go func() {
-		// Esperar un tiempo razonable para la transferencia
-		time.Sleep(time.Hour)
-		memoryCacheMu.Lock()
-		delete(memoryCache, cacheKey)
-		memoryCacheMu.Unlock()
-	}()
 	
 	// Modificar la URL de la tarea para que apunte al servidor local
 	task.Url = fmt.Sprintf("http://127.0.0.1:%s/%s", memoryPort, cacheKey)
