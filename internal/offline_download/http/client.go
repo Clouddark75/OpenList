@@ -29,8 +29,15 @@ const (
 )
 
 // Almacenamiento en memoria para archivos descargados
+type memoryFile struct {
+	buffer    *bytes.Buffer
+	accessed  time.Time
+	readCount int
+	mu        sync.Mutex
+}
+
 var (
-	memoryCache   = make(map[string]*bytes.Buffer)
+	memoryCache   = make(map[string]*memoryFile)
 	memoryCacheMu sync.RWMutex
 	memoryServer  *http.Server
 	memoryPort    string
