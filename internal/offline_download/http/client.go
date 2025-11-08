@@ -16,7 +16,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/offline_download/tool"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
 
 const (
@@ -174,7 +173,7 @@ func (s SimpleHttp) downloadAdaptive(task *tool.DownloadTask, body io.Reader, fi
 
 			// Actualizar progreso si se conoce tamaño
 			if fileSize > 0 {
-				task.SetProgress(progress)
+				task.SetProgress(float64(progress))
 			}
 
 			// Decidir dónde escribir
