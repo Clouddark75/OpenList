@@ -2,14 +2,17 @@ package http
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -23,6 +26,15 @@ const (
 	InMemoryMaxSize = int64(5 * 1024 * 1024 * 1024)
 	// Tamaño del buffer de lectura
 	ChunkSize = 64 * 1024 // 64KB
+)
+
+// Almacenamiento en memoria para archivos descargados
+var (
+	memoryCache   = make(map[string]*bytes.Buffer)
+	memoryCacheMu sync.RWMutex
+	memoryServer  *http.Server
+	memoryPort    string
+	serverOnce    sync.Once
 )
 
 type SimpleHttp struct{}
@@ -53,6 +65,44 @@ func (s SimpleHttp) Remove(task *tool.DownloadTask) error {
 
 func (s SimpleHttp) Status(task *tool.DownloadTask) (*tool.Status, error) {
 	panic("should not be called")
+}
+
+// Inicializar servidor HTTP local para servir archivos desde memoria
+func initMemoryServer() {
+	serverOnce.Do(func() {
+		// Encontrar puerto disponible
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return
+		}
+		memoryPort = fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
+		
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			key := strings.TrimPrefix(r.URL.Path, "/")
+			
+			memoryCacheMu.RLock()
+			buffer, exists := memoryCache[key]
+			memoryCacheMu.RUnlock()
+			
+			if !exists {
+				http.NotFound(w, r)
+				return
+			}
+			
+			// Crear reader desde el buffer
+			reader := bytes.NewReader(buffer.Bytes())
+			
+			// Soporte para Range requests
+			http.ServeContent(w, r, key, time.Now(), reader)
+		})
+		
+		memoryServer = &http.Server{
+			Handler: mux,
+		}
+		
+		go memoryServer.Serve(listener)
+	})
 }
 
 func (s SimpleHttp) Run(task *tool.DownloadTask) error {
@@ -103,10 +153,10 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 		}
 		task.SetTotalBytes(fileSize)
 		
-		// Si el archivo es pequeño (≤ 5GB), lo descargamos en memoria primero
-		// y lo escribimos a un archivo temporal que TransferTask usará
+		// Si el archivo es pequeño (≤ 5GB), lo descargamos en memoria
+		// y servimos desde un servidor HTTP local
 		if fileSize > 0 && fileSize <= InMemoryMaxSize {
-			return s.downloadToTempForStreaming(task, client, filename, fileSize)
+			return s.downloadToMemoryForStreaming(task, client, filename, fileSize)
 		}
 		
 		// Si es muy grande, dejamos que TransferTask lo maneje con streaming directo
@@ -121,8 +171,11 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 	return s.downloadAdaptive(task, resp.Body, filename, fileSize)
 }
 
-// downloadToTempForStreaming descarga en memoria y guarda a temp para que TransferTask lo use
-func (s SimpleHttp) downloadToTempForStreaming(task *tool.DownloadTask, client *http.Client, filename string, fileSize int64) error {
+// downloadToMemoryForStreaming descarga en memoria y lo sirve via HTTP local
+func (s SimpleHttp) downloadToMemoryForStreaming(task *tool.DownloadTask, client *http.Client, filename string, fileSize int64) error {
+	// Inicializar servidor de memoria si no existe
+	initMemoryServer()
+	
 	// Hacer el GET request real
 	req, err := http.NewRequestWithContext(task.Ctx(), http.MethodGet, task.Url, nil)
 	if err != nil {
@@ -172,22 +225,26 @@ func (s SimpleHttp) downloadToTempForStreaming(task *tool.DownloadTask, client *
 		}
 	}
 
-	// Crear directorio temporal
-	if err := os.MkdirAll(task.TempDir, os.ModePerm); err != nil {
-		return fmt.Errorf("no se pudo crear directorio temporal: %w", err)
-	}
-
-	// Escribir a archivo temporal que TransferTask usará
-	filePath := filepath.Join(task.TempDir, filename)
-	file, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("no se pudo crear archivo temporal: %w", err)
-	}
-	defer file.Close()
-
-	if _, err := io.Copy(file, buffer); err != nil {
-		return fmt.Errorf("error al escribir desde memoria: %w", err)
-	}
+	// Generar clave única para este archivo
+	cacheKey := fmt.Sprintf("%s-%d", filename, time.Now().UnixNano())
+	
+	// Almacenar en memoria
+	memoryCacheMu.Lock()
+	memoryCache[cacheKey] = buffer
+	memoryCacheMu.Unlock()
+	
+	// Limpiar después de que se complete o falle la tarea
+	go func() {
+		// Esperar un tiempo razonable para la transferencia
+		time.Sleep(time.Hour)
+		memoryCacheMu.Lock()
+		delete(memoryCache, cacheKey)
+		memoryCacheMu.Unlock()
+	}()
+	
+	// Modificar la URL de la tarea para que apunte al servidor local
+	task.Url = fmt.Sprintf("http://127.0.0.1:%s/%s", memoryPort, cacheKey)
+	task.TempDir = filename
 
 	return nil
 }
