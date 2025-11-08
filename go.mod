@@ -10,10 +10,11 @@ require (
     github.com/Clouddark75/115driver v1.1.4
 	github.com/OpenListTeam/go-cache v0.1.0
 	github.com/OpenListTeam/sftpd-openlist v1.0.1
-	github.com/OpenListTeam/tache v0.2.0
+	github.com/OpenListTeam/tache v0.2.1
 	github.com/OpenListTeam/times v0.1.0
 	github.com/OpenListTeam/wopan-sdk-go v0.1.5
 	github.com/ProtonMail/go-crypto v1.3.0
+    github.com/ProtonMail/gopenpgp/v2 v2.9.0
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/aws/aws-sdk-go v1.55.7
@@ -42,6 +43,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/halalcloud/golang-sdk-lite v0.0.0-20251006164234-3c629727c499
 	github.com/hekmon/transmissionrpc/v3 v3.0.0
+	github.com/henrybear327/go-proton-api v1.0.0
 	github.com/ipfs/go-ipfs-api v0.7.0
 	github.com/itsHenry35/gofakes3 v0.0.8
 	github.com/jlaffaye/ftp v0.2.1-0.20240918233326-1b970516f5d3
@@ -90,7 +92,6 @@ require (
 	github.com/ProtonMail/gluon v0.17.1-0.20230724134000-308be39be96e // indirect
 	github.com/ProtonMail/go-mime v0.0.0-20230322103455-7d82a3887f2f // indirect
 	github.com/ProtonMail/go-srp v0.0.7 // indirect
-	github.com/ProtonMail/gopenpgp/v2 v2.9.0 // indirect
 	github.com/PuerkitoBio/goquery v1.10.3 // indirect
 	github.com/RoaringBitmap/roaring/v2 v2.4.5 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
@@ -103,7 +104,6 @@ require (
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/emersion/go-message v0.18.2 // indirect
 	github.com/emersion/go-vcard v0.0.0-20241024213814-c9703dde27ff // indirect
-	github.com/henrybear327/go-proton-api v1.0.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
