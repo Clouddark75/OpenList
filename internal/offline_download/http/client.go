@@ -111,7 +111,7 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 }
 
 // downloadAdaptive descarga primero en memoria, y si se supera el límite definido,
-// automáticamente cambia a escribir en disco sin perder el progreso.
+// automáticamente cambia a escribir directamente al archivo final sin usar temporales.
 func (s SimpleHttp) downloadAdaptive(task *tool.DownloadTask, body io.Reader, filename string, fileSize int64) error {
 	if err := os.MkdirAll(task.TempDir, os.ModePerm); err != nil {
 		return fmt.Errorf("no se pudo crear directorio temporal: %w", err)
@@ -120,10 +120,10 @@ func (s SimpleHttp) downloadAdaptive(task *tool.DownloadTask, body io.Reader, fi
 	filePath := filepath.Join(task.TempDir, filename)
 
 	var (
-		buf     bytes.Buffer
-		tmpFile *os.File
-		written int64
-		useDisk bool
+		buf      bytes.Buffer
+		outFile  *os.File
+		written  int64
+		useDisk  bool
 	)
 
 	// Pre-allocar buffer si conocemos el tamaño y es menor al límite
@@ -131,24 +131,23 @@ func (s SimpleHttp) downloadAdaptive(task *tool.DownloadTask, body io.Reader, fi
 		buf.Grow(int(fileSize))
 	}
 
-	// Crear archivo temporal lazy (solo si es necesario)
-	createTempFile := func() error {
-		if tmpFile != nil {
+	// Crear archivo final lazy (solo si es necesario)
+	createFinalFile := func() error {
+		if outFile != nil {
 			return nil
 		}
 		var err error
-		tmpFile, err = os.CreateTemp(task.TempDir, "partial-*")
+		outFile, err = os.Create(filePath)
 		if err != nil {
-			return fmt.Errorf("no se pudo crear archivo temporal: %w", err)
+			return fmt.Errorf("no se pudo crear archivo final: %w", err)
 		}
 		return nil
 	}
 
-	// Cleanup del archivo temporal
+	// Cleanup del archivo si hubo error
 	defer func() {
-		if tmpFile != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
+		if outFile != nil {
+			outFile.Close()
 		}
 	}()
 
@@ -159,6 +158,11 @@ func (s SimpleHttp) downloadAdaptive(task *tool.DownloadTask, body io.Reader, fi
 		// Verificar cancelación del contexto
 		select {
 		case <-task.Ctx().Done():
+			// Si hubo error, eliminar archivo parcial
+			if outFile != nil {
+				outFile.Close()
+				os.Remove(filePath)
+			}
 			return task.Ctx().Err()
 		default:
 		}
@@ -183,22 +187,22 @@ func (s SimpleHttp) downloadAdaptive(task *tool.DownloadTask, body io.Reader, fi
 					// Primera vez que superamos el límite
 					useDisk = true
 					
-					// Crear archivo temporal
-					if err := createTempFile(); err != nil {
+					// Crear archivo final
+					if err := createFinalFile(); err != nil {
 						return err
 					}
 
-					// Volcar lo que teníamos en memoria al disco
+					// Volcar lo que teníamos en memoria al archivo final
 					if buf.Len() > 0 {
-						if _, err := tmpFile.Write(buf.Bytes()); err != nil {
+						if _, err := outFile.Write(buf.Bytes()); err != nil {
 							return fmt.Errorf("error al volcar buffer a disco: %w", err)
 						}
 						buf.Reset() // Liberar memoria
 					}
 				}
 
-				// Escribir chunk actual al disco
-				if _, err := tmpFile.Write(chunk[:n]); err != nil {
+				// Escribir chunk actual al archivo final
+				if _, err := outFile.Write(chunk[:n]); err != nil {
 					return fmt.Errorf("error al escribir chunk en disco: %w", err)
 				}
 			}
@@ -208,28 +212,20 @@ func (s SimpleHttp) downloadAdaptive(task *tool.DownloadTask, body io.Reader, fi
 			break
 		}
 		if err != nil {
+			// En caso de error, eliminar archivo parcial
+			if outFile != nil {
+				outFile.Close()
+				os.Remove(filePath)
+			}
 			return fmt.Errorf("error durante la lectura HTTP: %w", err)
 		}
 	}
 
-	// Crear archivo final
-	outFile, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("no se pudo crear archivo final: %w", err)
-	}
-	defer outFile.Close()
-
-	// Escribir al archivo final desde la fuente correspondiente
-	if useDisk {
-		// Datos están en disco temporal
-		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
-			return fmt.Errorf("error al reposicionar archivo temporal: %w", err)
+	// Si terminamos con datos en memoria, escribirlos ahora
+	if !useDisk {
+		if err := createFinalFile(); err != nil {
+			return err
 		}
-		if _, err := io.Copy(outFile, tmpFile); err != nil {
-			return fmt.Errorf("error al copiar desde archivo temporal: %w", err)
-		}
-	} else {
-		// Datos están en memoria
 		if _, err := io.Copy(outFile, &buf); err != nil {
 			return fmt.Errorf("error al escribir desde memoria: %w", err)
 		}
