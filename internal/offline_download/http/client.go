@@ -103,10 +103,6 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 		}
 		task.SetTotalBytes(fileSize)
 		
-		// En lugar de solo retornar, ahora descargamos con optimización
-		// Guardamos el filename para que Transfer lo use
-		task.TempDir = filename
-		
 		// Si el archivo es pequeño (≤ 5GB), lo descargamos en memoria primero
 		// y lo escribimos a un archivo temporal que TransferTask usará
 		if fileSize > 0 && fileSize <= InMemoryMaxSize {
@@ -114,6 +110,8 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 		}
 		
 		// Si es muy grande, dejamos que TransferTask lo maneje con streaming directo
+		// Guardamos el filename para que Transfer lo use
+		task.TempDir = filename
 		return nil
 	}
 
