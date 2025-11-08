@@ -29,10 +29,12 @@ const (
 
 // Almacenamiento en memoria para archivos descargados
 type memoryFile struct {
-	buffer    *bytes.Buffer
-	accessed  time.Time
-	readCount int
-	mu        sync.Mutex
+	buffer      *bytes.Buffer
+	accessed    time.Time
+	bytesServed int64
+	totalSize   int64
+	completed   bool
+	mu          sync.Mutex
 }
 
 var (
@@ -96,29 +98,20 @@ func initMemoryServer() {
 				return
 			}
 			
-			// Actualizar último acceso y contador
+			// Actualizar último acceso
 			memFile.mu.Lock()
 			memFile.accessed = time.Now()
-			memFile.readCount++
-			isComplete := memFile.readCount >= 1 // Después de primera lectura completa
 			memFile.mu.Unlock()
 			
 			// Crear reader desde el buffer
-			reader := bytes.NewReader(memFile.buffer.Bytes())
+			reader := &trackingReader{
+				reader:  bytes.NewReader(memFile.buffer.Bytes()),
+				memFile: memFile,
+				key:     key,
+			}
 			
 			// Soporte para Range requests
 			http.ServeContent(w, r, key, time.Now(), reader)
-			
-			// Si ya se leyó completamente, programar limpieza inmediata
-			if isComplete {
-				go func() {
-					// Esperar 5 segundos para asegurar que la lectura terminó
-					time.Sleep(5 * time.Second)
-					memoryCacheMu.Lock()
-					delete(memoryCache, key)
-					memoryCacheMu.Unlock()
-				}()
-			}
 		})
 		
 		memoryServer = &http.Server{
@@ -127,17 +120,17 @@ func initMemoryServer() {
 		
 		go memoryServer.Serve(listener)
 		
-		// Limpiador de archivos antiguos (por si acaso)
+		// Limpiador de archivos antiguos (respaldo por si algo falla)
 		go func() {
-			ticker := time.NewTicker(1 * time.Minute)
+			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
 				memoryCacheMu.Lock()
 				now := time.Now()
 				for key, memFile := range memoryCache {
 					memFile.mu.Lock()
-					// Eliminar si no se ha accedido en 5 minutos
-					if now.Sub(memFile.accessed) > 5*time.Minute {
+					// Eliminar si está marcado como completado o no se accede en 2 minutos
+					if memFile.completed || now.Sub(memFile.accessed) > 2*time.Minute {
 						delete(memoryCache, key)
 					}
 					memFile.mu.Unlock()
@@ -146,6 +139,47 @@ func initMemoryServer() {
 			}
 		}()
 	})
+}
+
+// trackingReader envuelve un io.Reader para rastrear cuántos bytes se han leído
+type trackingReader struct {
+	reader  io.ReadSeeker
+	memFile *memoryFile
+	key     string
+}
+
+func (tr *trackingReader) Read(p []byte) (n int, err error) {
+	n, err = tr.reader.Read(p)
+	
+	if n > 0 {
+		tr.memFile.mu.Lock()
+		tr.memFile.bytesServed += int64(n)
+		bytesServed := tr.memFile.bytesServed
+		totalSize := tr.memFile.totalSize
+		tr.memFile.mu.Unlock()
+		
+		// Si hemos servido todos los bytes, marcar como completado y liberar
+		if err == io.EOF || bytesServed >= totalSize {
+			tr.memFile.mu.Lock()
+			tr.memFile.completed = true
+			tr.memFile.mu.Unlock()
+			
+			// Liberar memoria inmediatamente
+			go func() {
+				// Pequeña espera para asegurar que la respuesta HTTP se envió
+				time.Sleep(100 * time.Millisecond)
+				memoryCacheMu.Lock()
+				delete(memoryCache, tr.key)
+				memoryCacheMu.Unlock()
+			}()
+		}
+	}
+	
+	return n, err
+}
+
+func (tr *trackingReader) Seek(offset int64, whence int) (int64, error) {
+	return tr.reader.Seek(offset, whence)
 }
 
 func (s SimpleHttp) Run(task *tool.DownloadTask) error {
@@ -274,9 +308,11 @@ func (s SimpleHttp) downloadToMemoryForStreaming(task *tool.DownloadTask, client
 	// Almacenar en memoria
 	memoryCacheMu.Lock()
 	memoryCache[cacheKey] = &memoryFile{
-		buffer:    buffer,
-		accessed:  time.Now(),
-		readCount: 0,
+		buffer:      buffer,
+		accessed:    time.Now(),
+		bytesServed: 0,
+		totalSize:   int64(buffer.Len()),
+		completed:   false,
 	}
 	memoryCacheMu.Unlock()
 	
