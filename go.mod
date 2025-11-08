@@ -43,6 +43,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/halalcloud/golang-sdk-lite v0.0.0-20251006164234-3c629727c499
 	github.com/hekmon/transmissionrpc/v3 v3.0.0
+	github.com/henrybear327/go-proton-api v1.0.0
 	github.com/ipfs/go-ipfs-api v0.7.0
 	github.com/itsHenry35/gofakes3 v0.0.8
 	github.com/jlaffaye/ftp v0.2.1-0.20240918233326-1b970516f5d3
@@ -103,7 +104,6 @@ require (
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/emersion/go-message v0.18.2 // indirect
 	github.com/emersion/go-vcard v0.0.0-20241024213814-c9703dde27ff // indirect
-	github.com/henrybear327/go-proton-api v1.0.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
