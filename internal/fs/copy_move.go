@@ -197,11 +197,13 @@ func (t *FileTransferTask) RunWithNextTaskCallback(f func(nextTask *FileTransfer
 		}
 
 		// Para merge: obtener archivos existentes en destino
-		dstObjs, _ := op.List(t.Ctx(), t.DstStorage, dstActualPath, model.ListArgs{})
 		existedObjs := make(map[string]bool)
-		for _, obj := range dstObjs {
-			if !obj.IsDir() {
-				existedObjs[obj.GetName()] = true
+		if t.TaskType == merge {
+			dstObjs, _ := op.List(t.Ctx(), t.DstStorage, dstActualPath, model.ListArgs{})
+			for _, obj := range dstObjs {
+				if !obj.IsDir() {
+					existedObjs[obj.GetName()] = true
+				}
 			}
 		}
 
