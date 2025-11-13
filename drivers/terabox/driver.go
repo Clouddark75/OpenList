@@ -5,11 +5,8 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
-    "encoding/json"	
 	"fmt"
 	"io"
-    "io/ioutil"
-    "net/http"	
 	stdpath "path"
 	"strconv"
 	"sync"
@@ -508,30 +505,31 @@ func (d *Terabox) getRetryCount() int {
 }
 
 func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
-    // Crear un cliente HTTP con timeout más largo
-    client := &http.Client{
-        Timeout: 60 * time.Second,  // Timeout de 60 segundos
-    }
-    
-    var quotaResp QuotaResp
-    // Usamos el cliente con el timeout configurado
-    _, err := d.getWithClient(client, "/api/quota", nil, &quotaResp)
-    if err != nil {
-        return nil, err
-    }
-
-    if quotaResp.Errno != 0 {
-        return nil, fmt.Errorf("[terabox] failed to get quota, errno: %d", quotaResp.Errno)
-    }
-
-    // Round to GiB for display consistency.
+	var quotaResp QuotaResp
+	_, err := d.get("/api/quota", nil, &quotaResp)
+	if err != nil {
+		return nil, err
+	}
+	
+	if quotaResp.Errno != 0 {
+		return nil, fmt.Errorf("[terabox] failed to get quota, errno: %d", quotaResp.Errno)
+	}
+	
+	// Round to GiB for display consistency.
+    // Terabox shows 2173253451776 bytes as "2024 GB".
+    // We’ll make OpenList display a rounded number visually (GiB base),
+    // but keep the byte count accurate internally.
     const gib = uint64(1024 * 1024 * 1024)
+
+    // Convert quota to GiB (rounded)
     totalGiB := (uint64(quotaResp.Total) + gib/2) / gib
     usedGiB := (uint64(quotaResp.Used) + gib/2) / gib
 
+    // Convert back to bytes
     total := totalGiB * gib
     used := usedGiB * gib
 
+    // Protect against underflow if used > total
     var free uint64
     if used > total {
         free = 0
@@ -541,38 +539,9 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 
     return &model.StorageDetails{
         DiskUsage: model.DiskUsage{
-            TotalSpace: total,
-            FreeSpace:  free,
+           TotalSpace: total,
+           FreeSpace:  free,
         },
     }, nil
-}
-
-// Función auxiliar para hacer la solicitud HTTP con un cliente personalizado
-func (d *Terabox) getWithClient(client *http.Client, url string, params map[string]string, resp interface{}) (int, error) {
-    req, err := http.NewRequest("GET", d.base_url+url, nil)
-    if err != nil {
-        return 0, err
-    }
-
-    // Realiza la solicitud HTTP
-    respHttp, err := client.Do(req)
-    if err != nil {
-        return 0, err
-    }
-    defer respHttp.Body.Close()
-
-    // Lee el cuerpo de la respuesta
-    body, err := ioutil.ReadAll(respHttp.Body)
-    if err != nil {
-        return 0, err
-    }
-
-    // Deserializa la respuesta en el objeto `resp`
-    err = json.Unmarshal(body, resp)
-    if err != nil {
-        return 0, err
-    }
-
-    return respHttp.StatusCode, nil
 }
 var _ driver.Driver = (*Terabox)(nil)
