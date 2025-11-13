@@ -28,46 +28,80 @@ type detailWithIndex struct {
 	val *model.StorageDetails
 }
 
-func makeStorageResp(ctx *gin.Context, storages []model.Storage) []*StorageResp {
+func makeStorageResp(c *gin.Context, storages []model.Storage) []*StorageResp {
 	ret := make([]*StorageResp, len(storages))
-	detailsChan := make(chan detailWithIndex, len(storages))
-	workerCount := 0
+	var wg sync.WaitGroup
+	
+	// Timeout individual por storage: configurable, por defecto 10s
+	// Esto permite drivers lentos sin afectar a los rápidos
+	storageTimeout := time.Duration(setting.GetInt(conf.StorageDetailsTimeout, 10)) * time.Second
+	
+	// Timeout global opcional: solo para casos extremos
+	// Por defecto 0 = sin timeout (comportamiento original)
+	globalTimeout := time.Duration(setting.GetInt(conf.StorageDetailsGlobalTimeout, 0)) * time.Second
+	
 	for i, s := range storages {
 		ret[i] = &StorageResp{
 			Storage:      s,
 			MountDetails: nil,
 		}
+		
 		if setting.GetBool(conf.HideStorageDetailsInManagePage) {
 			continue
 		}
+		
 		d, err := op.GetStorageByMountPath(s.MountPath)
 		if err != nil {
 			continue
 		}
+		
 		_, ok := d.(driver.WithDetails)
 		if !ok {
 			continue
 		}
-		workerCount++
-		go func(dri driver.Driver, idx int) {
-			details, e := op.GetStorageDetails(ctx, dri)
-			if e != nil {
-				if !errors.Is(e, errs.NotImplement) && !errors.Is(e, errs.StorageNotInit) {
-					log.Errorf("failed get %s details: %+v", dri.GetStorage().MountPath, e)
+		
+		wg.Add(1)
+		go func(idx int, dri driver.Driver, mountPath string) {
+			defer wg.Done()
+			
+			// Context con timeout individual por storage
+			ctx, cancel := context.WithTimeout(c, storageTimeout)
+			defer cancel()
+			
+			details, err := op.GetStorageDetails(ctx, dri, false)
+			if err != nil {
+				if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.StorageNotInit) {
+					if errors.Is(err, context.DeadlineExceeded) {
+						log.Warnf("timeout loading details for %s after %v", mountPath, storageTimeout)
+					} else {
+						log.Errorf("failed get %s details: %+v", mountPath, err)
+					}
 				}
+				return
 			}
-			detailsChan <- detailWithIndex{idx: idx, val: details}
-		}(d, i)
+			ret[idx].MountDetails = details
+		}(i, d, s.MountPath)
 	}
-	for workerCount > 0 {
+	
+	// Si hay timeout global configurado, usarlo
+	if globalTimeout > 0 {
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		
 		select {
-		case r := <-detailsChan:
-			ret[r.idx].MountDetails = r.val
-			workerCount--
-		case <-time.After(time.Second * 3):
-			workerCount = 0
+		case <-done:
+			// Todos completaron dentro del timeout
+		case <-time.After(globalTimeout):
+			log.Warnf("global timeout of %v reached while loading storage details", globalTimeout)
 		}
+	} else {
+		// Sin timeout global: esperar a todos (comportamiento original)
+		wg.Wait()
 	}
+	
 	return ret
 }
 
