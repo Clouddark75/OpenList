@@ -3,6 +3,7 @@ package terabox
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -13,7 +14,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"github.com/avast/retry-go"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 )
@@ -22,15 +22,6 @@ const (
 	initialChunkSize     int64 = 4 << 20 // 4MB
 	initialSizeThreshold int64 = 4 << 30 // 4GB
 )
-
-var retryErrorCodes = []int{
-	429, // Too Many Requests
-	500, // Internal Server Error
-	502, // Bad Gateway
-	503, // Service Unavailable
-	504, // Gateway Timeout
-	509, // Bandwidth Limit Exceeded
-}
 
 func getStrBetween(raw, start, end string) string {
 	regexPattern := fmt.Sprintf(`%s(.*?)%s`, regexp.QuoteMeta(start), regexp.QuoteMeta(end))
@@ -49,7 +40,7 @@ func (d *Terabox) resetJsToken() error {
 		"Cookie":           d.Cookie,
 		"Accept":           "application/json, text/plain, */*",
 		"Referer":          d.base_url,
-		"User-Agent":       d.UserAgent,
+		"User-Agent":       "terabox;1.37.0.7;PC;PC-Windows;10.0.22631;WindowsTeraBox",
 		"X-Requested-With": "XMLHttpRequest",
 	}).Get(u)
 	if err != nil {
@@ -61,124 +52,63 @@ func (d *Terabox) resetJsToken() error {
 		return fmt.Errorf("jsToken not found, html: %s", html)
 	}
 	d.JsToken = jsToken
-	log.Debugf("jsToken refreshed: %s", jsToken)
 	return nil
-}
-
-// ensureJsToken ensures that we have a valid jsToken before making operations that require it
-func (d *Terabox) ensureJsToken() error {
-	if d.JsToken == "" {
-		return d.resetJsToken()
-	}
-	return nil
-}
-
-func isRetryableError(statusCode int) bool {
-	for _, code := range retryErrorCodes {
-		if statusCode == code {
-			return true
-		}
-	}
-	return false
 }
 
 func (d *Terabox) request(rurl string, method string, callback base.ReqCallback, resp interface{}, noRetry ...bool) ([]byte, error) {
-	var body []byte
-	var jsTokenRefreshed bool
+	req := base.RestyClient.R()
+	req.SetHeaders(map[string]string{
+		"Cookie":           d.Cookie,
+		"Accept":           "application/json, text/plain, */*",
+		"Referer":          d.base_url,
+		"User-Agent":       "terabox;1.37.0.7;PC;PC-Windows;10.0.22631;WindowsTeraBox",
+		"X-Requested-With": "XMLHttpRequest",
+	})
+	req.SetQueryParams(map[string]string{
+		"app_id":     "250528",
+		"web":        "1",
+		"channel":    "dubox",
+		"clienttype": "0",
+		"jsToken":    d.JsToken,
+	})
+	if callback != nil {
+		callback(req)
+	}
+	if resp != nil {
+		req.SetResult(resp)
+	}
 
-	err := retry.Do(
-		func() error {
-			req := base.RestyClient.R()
-			req.SetHeaders(map[string]string{
-				"Cookie":           d.Cookie,
-				"Accept":           "application/json, text/plain, */*",
-				"Referer":          d.base_url,
-				"User-Agent":       d.UserAgent,
-				"X-Requested-With": "XMLHttpRequest",
-			})
-			
-			// Always include jsToken in query params if we have it
-			queryParams := map[string]string{
-				"app_id":     "250528",
-				"web":        "1",
-				"channel":    "dubox",
-				"clienttype": "0",
-			}
-			
-			if d.JsToken != "" {
-				queryParams["jsToken"] = d.JsToken
-			}
-			
-			req.SetQueryParams(queryParams)
-			
-			if callback != nil {
-				callback(req)
-			}
-			if resp != nil {
-				req.SetResult(resp)
-			}
-			
-			res, err := req.Execute(method, d.base_url+rurl)
-			if err != nil {
-				// Check if it's a retryable HTTP error
-				if res != nil && isRetryableError(res.StatusCode()) {
-					return fmt.Errorf("retryable HTTP error %d: %v", res.StatusCode(), err)
-				}
-				return retry.Unrecoverable(err)
-			}
-			
-			body = res.Body()
-			errno := utils.Json.Get(body, "errno").ToInt()
-			
-			// Handle specific error codes
-			switch errno {
-			case 4000023, 45016, 450016: // jsToken related errors
-				if !jsTokenRefreshed && !utils.IsBool(noRetry...) {
-					log.Debugf("jsToken error (errno: %d), refreshing token", errno)
-					tokenErr := d.resetJsToken()
-					if tokenErr != nil {
-						return retry.Unrecoverable(fmt.Errorf("failed to refresh jsToken: %v", tokenErr))
-					}
-					jsTokenRefreshed = true
-					return fmt.Errorf("jsToken refreshed, retrying request")
-				}
-				return retry.Unrecoverable(fmt.Errorf("jsToken error after refresh, errno: %d", errno))
-				
-			case -6: // Domain redirect
-				header := res.Header()
-				log.Debugln("Redirect headers:", header)
-				urlDomainPrefix := header.Get("Url-Domain-Prefix")
-				if len(urlDomainPrefix) > 0 {
-					oldBaseURL := d.base_url
-					d.url_domain_prefix = urlDomainPrefix
-					d.base_url = "https://" + d.url_domain_prefix + ".terabox.com"
-					log.Debugf("Base URL redirected from %s to %s", oldBaseURL, d.base_url)
-					return fmt.Errorf("domain redirected, retrying request")
-				}
-				return retry.Unrecoverable(fmt.Errorf("domain redirect error without prefix, errno: %d", errno))
-				
-			case 9000:
-				return retry.Unrecoverable(fmt.Errorf("terabox is not yet available in this area"))
-				
-			default:
-				// For other non-zero errno values, check if it's a general error
-				if errno != 0 {
-					log.Debugf("API error with errno: %d, response: %s", errno, string(body))
-					return retry.Unrecoverable(fmt.Errorf("API error, errno: %d", errno))
-				}
-			}
-			
-			return nil
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Request %s %s failed (attempt %d): %v", method, rurl, n+1, err)
-		}),
-	)
-	
-	return body, err
+	full_url := d.base_url + rurl
+	if strings.HasPrefix(rurl, "https://") {
+		full_url = rurl
+	}
+
+	res, err := req.Execute(method, full_url)
+	if err != nil {
+		return nil, err
+	}
+	errno := utils.Json.Get(res.Body(), "errno").ToInt()
+	if errno == 4000023 || errno == 4500016 {
+		// reget jsToken
+		err = d.resetJsToken()
+		if err != nil {
+			return nil, err
+		}
+		if !utils.IsBool(noRetry...) {
+			return d.request(rurl, method, callback, resp, true)
+		}
+	} else if errno == -6 {
+		header := res.Header()
+		log.Debugln(header)
+		urlDomainPrefix := header.Get("Url-Domain-Prefix")
+		if len(urlDomainPrefix) > 0 {
+			d.url_domain_prefix = urlDomainPrefix
+			d.base_url = "https://" + d.url_domain_prefix + ".terabox.com"
+			log.Debugln("Redirect base_url to", d.base_url)
+			return d.request(rurl, method, callback, resp, noRetry...)
+		}
+	}
+	return res.Body(), nil
 }
 
 func (d *Terabox) get(pathname string, params map[string]string, resp interface{}) ([]byte, error) {
@@ -207,6 +137,22 @@ func (d *Terabox) post_form(pathname string, params map[string]string, data map[
 	}, resp)
 }
 
+func (d *Terabox) post_multipart(
+	pathname string,
+	params map[string]string,
+	fileFieldName string,
+	fileName string,
+	fileReader io.Reader,
+	resp interface{},
+) ([]byte, error) {
+	return d.request(pathname, http.MethodPost, func(req *resty.Request) {
+		if params != nil {
+			req.SetQueryParams(params)
+		}
+		req.SetFileReader(fileFieldName, fileName, fileReader)
+	}, resp)
+}
+
 func (d *Terabox) getFiles(dir string) ([]File, error) {
 	page := 1
 	num := 100
@@ -220,35 +166,17 @@ func (d *Terabox) getFiles(dir string) ([]File, error) {
 		}
 	}
 	res := make([]File, 0)
-	
 	for {
 		params["page"] = strconv.Itoa(page)
 		params["num"] = strconv.Itoa(num)
-		
 		var resp ListResp
-		err := retry.Do(
-			func() error {
-				_, err := d.get("/api/list", params, &resp)
-				if err != nil {
-					return err
-				}
-				if resp.Errno == 9000 {
-					return retry.Unrecoverable(fmt.Errorf("terabox is not yet available in this area"))
-				}
-				return nil
-			},
-			retry.Attempts(uint(d.getRetryCount())),
-			retry.Delay(time.Second),
-			retry.DelayType(retry.BackOffDelay),
-			retry.OnRetry(func(n uint, err error) {
-				log.Warnf("Failed to get files list (attempt %d): %v", n+1, err)
-			}),
-		)
-		
+		_, err := d.get("/api/list", params, &resp)
 		if err != nil {
 			return nil, err
 		}
-		
+		if resp.Errno == 9000 {
+			return nil, fmt.Errorf("terabox is not yet available in this area")
+		}
 		if len(resp.List) == 0 {
 			break
 		}
@@ -283,167 +211,78 @@ func sign(s1, s2 string) string {
 
 func (d *Terabox) genSign() (string, error) {
 	var resp HomeInfoResp
-	var signString string
-	
-	err := retry.Do(
-		func() error {
-			_, err := d.get("/api/home/info", map[string]string{}, &resp)
-			if err != nil {
-				return err
-			}
-			signString = sign(resp.Data.Sign3, resp.Data.Sign1)
-			return nil
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to generate sign (attempt %d): %v", n+1, err)
-		}),
-	)
-	
-	return signString, err
+	_, err := d.get("/api/home/info", map[string]string{}, &resp)
+	if err != nil {
+		return "", err
+	}
+	return sign(resp.Data.Sign3, resp.Data.Sign1), nil
 }
 
 func (d *Terabox) linkOfficial(file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp DownloadResp
-	var downloadLink string
-	
-	err := retry.Do(
-		func() error {
-			signString, err := d.genSign()
-			if err != nil {
-				return err
-			}
-			params := map[string]string{
-				"type":      "dlink",
-				"fidlist":   fmt.Sprintf("[%s]", file.GetID()),
-				"sign":      signString,
-				"vip":       "2",
-				"timestamp": strconv.FormatInt(time.Now().Unix(), 10),
-			}
-			_, err = d.get("/api/download", params, &resp)
-			if err != nil {
-				return err
-			}
-
-			if len(resp.Dlink) == 0 {
-				return fmt.Errorf("fid %s no dlink found, errno: %d", file.GetID(), resp.Errno)
-			}
-
-			res, err := base.NoRedirectClient.R().
-				SetHeader("Cookie", d.Cookie).
-				SetHeader("User-Agent", d.UserAgent).
-				Get(resp.Dlink[0].Dlink)
-			if err != nil {
-				return err
-			}
-			downloadLink = res.Header().Get("location")
-			return nil
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to get official download link (attempt %d): %v", n+1, err)
-		}),
-	)
-	
+	signString, err := d.genSign()
 	if err != nil {
 		return nil, err
 	}
-	
+	params := map[string]string{
+		"type":      "dlink",
+		"fidlist":   fmt.Sprintf("[%s]", file.GetID()),
+		"sign":      signString,
+		"vip":       "2",
+		"timestamp": strconv.FormatInt(time.Now().Unix(), 10),
+	}
+	_, err = d.get("/api/download", params, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Dlink) == 0 {
+		return nil, fmt.Errorf("fid %s no dlink found, errno: %d", file.GetID(), resp.Errno)
+	}
+
+	res, err := base.NoRedirectClient.R().SetHeader("Cookie", d.Cookie).SetHeader("User-Agent", "terabox;1.37.0.7;PC;PC-Windows;10.0.22631;WindowsTeraBox").Get(resp.Dlink[0].Dlink)
+	if err != nil {
+		return nil, err
+	}
+	u := res.Header().Get("location")
 	return &model.Link{
-		URL: downloadLink,
+		URL: u,
 		Header: http.Header{
-			"User-Agent": []string{d.UserAgent},
+			"User-Agent": []string{"terabox;1.37.0.7;PC;PC-Windows;10.0.22631;WindowsTeraBox"},
 		},
 	}, nil
 }
 
 func (d *Terabox) linkCrack(file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp DownloadResp2
-	var downloadLink string
-	
-	err := retry.Do(
-		func() error {
-			param := map[string]string{
-				"target": fmt.Sprintf("[\"%s\"]", file.GetPath()),
-				"dlink":  "1",
-				"origin": "dlna",
-			}
-			_, err := d.get("/api/filemetas", param, &resp)
-			if err != nil {
-				return err
-			}
-			
-			if len(resp.Info) == 0 {
-				return fmt.Errorf("no download info found for file: %s", file.GetPath())
-			}
-			
-			downloadLink = resp.Info[0].Dlink
-			return nil
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to get crack download link (attempt %d): %v", n+1, err)
-		}),
-	)
-	
+	param := map[string]string{
+		"target": fmt.Sprintf("[\"%s\"]", file.GetPath()),
+		"dlink":  "1",
+		"origin": "dlna",
+	}
+	_, err := d.get("/api/filemetas", param, &resp)
 	if err != nil {
 		return nil, err
 	}
-	
 	return &model.Link{
-		URL: downloadLink,
+		URL: resp.Info[0].Dlink,
 		Header: http.Header{
-			"User-Agent": []string{d.UserAgent},
+			"User-Agent": []string{"terabox;1.37.0.7;PC;PC-Windows;10.0.22631;WindowsTeraBox"},
 		},
 	}, nil
 }
 
-// Updated manage function to ensure jsToken is available with retry
 func (d *Terabox) manage(opera string, filelist interface{}) ([]byte, error) {
-	var result []byte
-	
-	err := retry.Do(
-		func() error {
-			// Ensure jsToken is available before making management operations
-			if err := d.ensureJsToken(); err != nil {
-				return fmt.Errorf("failed to get jsToken for operation %s: %v", opera, err)
-			}
-			
-			params := map[string]string{
-				"onnest": "fail",
-				"opera":  opera,
-				"async":  "0", // Following rclone's approach for synchronous operations
-			}
-			marshal, err := utils.Json.Marshal(filelist)
-			if err != nil {
-				return retry.Unrecoverable(fmt.Errorf("failed to marshal filelist: %v", err))
-			}
-			data := fmt.Sprintf("async=0&filelist=%s&ondup=newcopy", encodeURIComponent(string(marshal)))
-			
-			// Use POST request with body data (following rclone's approach)
-			result, err = d.request("/api/filemanager", http.MethodPost, func(req *resty.Request) {
-				req.SetQueryParams(params)
-				req.SetBody(data)
-				req.SetHeader("Content-Type", "application/x-www-form-urlencoded")
-			}, nil)
-			
-			return err
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to perform %s operation (attempt %d): %v", opera, n+1, err)
-		}),
-	)
-	
-	return result, err
+	params := map[string]string{
+		"onnest": "fail",
+		"opera":  opera,
+	}
+	marshal, err := utils.Json.Marshal(filelist)
+	if err != nil {
+		return nil, err
+	}
+	data := fmt.Sprintf("async=0&filelist=%s&ondup=newcopy", encodeURIComponent(string(marshal)))
+	return d.post("/api/filemanager", params, data, nil)
 }
 
 func encodeURIComponent(str string) string {
