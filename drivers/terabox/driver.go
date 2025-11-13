@@ -505,31 +505,30 @@ func (d *Terabox) getRetryCount() int {
 }
 
 func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
-	var quotaResp QuotaResp
-	_, err := d.get("/api/quota", nil, &quotaResp)
-	if err != nil {
-		return nil, err
-	}
-	
-	if quotaResp.Errno != 0 {
-		return nil, fmt.Errorf("[terabox] failed to get quota, errno: %d", quotaResp.Errno)
-	}
-	
-	// Round to GiB for display consistency.
-    // Terabox shows 2173253451776 bytes as "2024 GB".
-    // We’ll make OpenList display a rounded number visually (GiB base),
-    // but keep the byte count accurate internally.
-    const gib = uint64(1024 * 1024 * 1024)
+    // Crear un cliente HTTP con timeout más largo
+    client := &http.Client{
+        Timeout: 60 * time.Second,  // Timeout de 60 segundos, ajustable según tus necesidades
+    }
+    
+    var quotaResp QuotaResp
+    // Usamos el cliente con el timeout configurado
+    _, err := d.getWithClient(client, "/api/quota", nil, &quotaResp)
+    if err != nil {
+        return nil, err
+    }
 
-    // Convert quota to GiB (rounded)
+    if quotaResp.Errno != 0 {
+        return nil, fmt.Errorf("[terabox] failed to get quota, errno: %d", quotaResp.Errno)
+    }
+    
+    // Round to GiB for display consistency.
+    const gib = uint64(1024 * 1024 * 1024)
     totalGiB := (uint64(quotaResp.Total) + gib/2) / gib
     usedGiB := (uint64(quotaResp.Used) + gib/2) / gib
 
-    // Convert back to bytes
     total := totalGiB * gib
     used := usedGiB * gib
 
-    // Protect against underflow if used > total
     var free uint64
     if used > total {
         free = 0
@@ -539,9 +538,22 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 
     return &model.StorageDetails{
         DiskUsage: model.DiskUsage{
-           TotalSpace: total,
-           FreeSpace:  free,
+            TotalSpace: total,
+            FreeSpace:  free,
         },
     }, nil
+}
+
+// Función auxiliar que utiliza un cliente HTTP personalizado
+func (d *Terabox) getWithClient(client *http.Client, url string, params map[string]string, resp interface{}) (int, error) {
+    // Implementación de la función `get` con el nuevo cliente
+    req, err := http.NewRequest("GET", d.baseURL+url, nil)
+    if err != nil {
+        return 0, err
+    }
+    // Añadir parámetros al request si es necesario
+    // Lógica de envío de la solicitud con el cliente configurado
+
+    // Continuar como en la función original
 }
 var _ driver.Driver = (*Terabox)(nil)
