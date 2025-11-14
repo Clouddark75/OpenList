@@ -33,13 +33,12 @@ func makeStorageResp(c *gin.Context, storages []model.Storage) []*StorageResp {
 	ret := make([]*StorageResp, len(storages))
 	var wg sync.WaitGroup
 	
-	// Timeout individual por storage: configurable, por defecto 10s
-	// Esto permite drivers lentos sin afectar a los rápidos
-	storageTimeout := time.Duration(setting.GetInt(conf.StorageDetailsTimeout, 10)) * time.Second
-	
-	// Timeout global opcional: solo para casos extremos
-	// Por defecto 0 = sin timeout (comportamiento original)
-	globalTimeout := time.Duration(setting.GetInt(conf.StorageDetailsGlobalTimeout, 0)) * time.Second
+	// Timeout configurable: lee de config si existe, sino usa 10s
+	storageTimeoutSeconds := setting.GetInt("storage_details_timeout", 10)
+	if storageTimeoutSeconds < 1 {
+		storageTimeoutSeconds = 10
+	}
+	storageTimeout := time.Duration(storageTimeoutSeconds) * time.Second
 	
 	for i, s := range storages {
 		ret[i] = &StorageResp{
@@ -65,7 +64,6 @@ func makeStorageResp(c *gin.Context, storages []model.Storage) []*StorageResp {
 		go func(idx int, dri driver.Driver, mountPath string) {
 			defer wg.Done()
 			
-			// Context con timeout individual por storage
 			ctx, cancel := context.WithTimeout(c, storageTimeout)
 			defer cancel()
 			
@@ -84,25 +82,7 @@ func makeStorageResp(c *gin.Context, storages []model.Storage) []*StorageResp {
 		}(i, d, s.MountPath)
 	}
 	
-	// Si hay timeout global configurado, usarlo
-	if globalTimeout > 0 {
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-		
-		select {
-		case <-done:
-			// Todos completaron dentro del timeout
-		case <-time.After(globalTimeout):
-			log.Warnf("global timeout of %v reached while loading storage details", globalTimeout)
-		}
-	} else {
-		// Sin timeout global: esperar a todos (comportamiento original)
-		wg.Wait()
-	}
-	
+	wg.Wait()
 	return ret
 }
 
