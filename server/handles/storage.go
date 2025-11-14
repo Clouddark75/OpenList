@@ -24,64 +24,40 @@ type StorageResp struct {
 	MountDetails *model.StorageDetails `json:"mount_details,omitempty"`
 }
 
-type detailWithIndex struct {
-	idx int
-	val *model.StorageDetails
-}
-
 func makeStorageResp(c *gin.Context, storages []model.Storage) []*StorageResp {
 	ret := make([]*StorageResp, len(storages))
 	var wg sync.WaitGroup
-	
-	// Timeout configurable: lee de config si existe, sino usa 10s
-	storageTimeoutSeconds := setting.GetInt("storage_details_timeout", 10)
-	if storageTimeoutSeconds < 1 {
-		storageTimeoutSeconds = 10
-	}
-	storageTimeout := time.Duration(storageTimeoutSeconds) * time.Second
-	
 	for i, s := range storages {
 		ret[i] = &StorageResp{
 			Storage:      s,
 			MountDetails: nil,
 		}
-		
 		if setting.GetBool(conf.HideStorageDetailsInManagePage) {
 			continue
 		}
-		
 		d, err := op.GetStorageByMountPath(s.MountPath)
 		if err != nil {
 			continue
 		}
-		
 		_, ok := d.(driver.WithDetails)
 		if !ok {
 			continue
 		}
-		
 		wg.Add(1)
-		go func(idx int, dri driver.Driver, mountPath string) {
+		go func() {
 			defer wg.Done()
-			
-			ctx, cancel := context.WithTimeout(c, storageTimeout)
+			ctx, cancel := context.WithTimeout(c, time.Second*3)
 			defer cancel()
-			
-			details, err := op.GetStorageDetails(ctx, dri, false)
+			details, err := op.GetStorageDetails(ctx, d)
 			if err != nil {
 				if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.StorageNotInit) {
-					if errors.Is(err, context.DeadlineExceeded) {
-						log.Warnf("timeout loading details for %s after %v", mountPath, storageTimeout)
-					} else {
-						log.Errorf("failed get %s details: %+v", mountPath, err)
-					}
+					log.Errorf("failed get %s details: %+v", s.MountPath, err)
 				}
 				return
 			}
-			ret[idx].MountDetails = details
-		}(i, d, s.MountPath)
+			ret[i].MountDetails = details
+		}()
 	}
-	
 	wg.Wait()
 	return ret
 }
