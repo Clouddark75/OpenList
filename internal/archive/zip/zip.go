@@ -17,23 +17,26 @@ type Zip struct {
 }
 
 func (z *Zip) AcceptedExtensions() []string {
-	return []string{}
+	return []string{".zip"}
 }
 
 func (z *Zip) AcceptedMultipartExtensions() map[string]tool.MultipartExtension {
 	return map[string]tool.MultipartExtension{
 		".zip": {
+			// Formato tradicional: archivo.zip, archivo.z01, archivo.z02
 			// Grupo 1: nombre base (ej: "archivo")
 			// Grupo 2: número de parte (ej: "01", "02")
+			// NOTA: .zip es la primera parte (índice 0), .z01 es la segunda (índice 1)
 			PartFileFormat:  regexp.MustCompile(`^(.+)\.z(\d+)$`),
-			SecondPartIndex: 1,
+			SecondPartIndex: 1, // .z01 es la parte 1 (segunda parte después de .zip)
 			BaseNameGroup:   1,
 		},
 		".zip.001": {
+			// Formato moderno: archivo.zip.001, archivo.zip.002
 			// Grupo 1: nombre base (ej: "archivo")
 			// Grupo 2: número de parte (ej: "001", "002")
 			PartFileFormat:  regexp.MustCompile(`^(.+)\.zip\.(\d+)$`),
-			SecondPartIndex: 2,
+			SecondPartIndex: 2, // .zip.002 es la parte 2
 			BaseNameGroup:   1,
 		},
 	}
