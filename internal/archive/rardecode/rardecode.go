@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/archive/tool"
@@ -16,16 +17,45 @@ import (
 
 type RarDecoder struct{}
 
+// AcceptedExtensions devuelve las extensiones aceptadas para archivos RAR
 func (RarDecoder) AcceptedExtensions() []string {
 	return []string{".rar"}
 }
 
+// AcceptedMultipartExtensions devuelve las extensiones aceptadas para archivos multipart RAR
 func (RarDecoder) AcceptedMultipartExtensions() map[string]tool.MultipartExtension {
 	return map[string]tool.MultipartExtension{
-		".part1.rar": {PartFileFormat: regexp.MustCompile(`^.*\.part(\d+)\.rar$`), SecondPartIndex: 2},
+		".part1.rar": {PartFileFormat: regexp.MustCompile(`^.*\.part(\d+)\.rar$`), SecondPartIndex: 2}, // Regex para las partes rar
 	}
 }
 
+// GroupMultipartFiles agrupa los archivos multipart por su basename y ordena las partes
+func (RarDecoder) GroupMultipartFiles(ss []*stream.SeekableStream) (map[string][]*stream.SeekableStream, error) {
+	groups := make(map[string][]*stream.SeekableStream)
+	// Agrupar los archivos por basename y número de parte
+	for _, s := range ss {
+		matches := partRegex.FindStringSubmatch(s.Name)
+		if matches != nil {
+			base := matches[partRegex.SubexpIndex("base")]
+			partNum := matches[partRegex.SubexpIndex("num")]
+			groupKey := base // Agrupamos por el nombre base
+			groups[groupKey] = append(groups[groupKey], s) // Añadimos el archivo al grupo correspondiente
+		}
+	}
+
+	// Ordenamos las partes dentro de cada grupo por el número de parte
+	for key, parts := range groups {
+		sort.Slice(parts, func(i, j int) bool {
+			// Comparamos el número de parte extraído del nombre del archivo
+			partI := partRegex.FindStringSubmatch(parts[i].Name)[partRegex.SubexpIndex("num")]
+			partJ := partRegex.FindStringSubmatch(parts[j].Name)[partRegex.SubexpIndex("num")]
+			return partI < partJ
+		})
+	}
+	return groups, nil
+}
+
+// GetMeta obtiene los metadatos del archivo RAR
 func (RarDecoder) GetMeta(ss []*stream.SeekableStream, args model.ArchiveArgs) (model.ArchiveMeta, error) {
 	l, err := list(ss, args.Password)
 	if err != nil {
@@ -39,10 +69,12 @@ func (RarDecoder) GetMeta(ss []*stream.SeekableStream, args model.ArchiveArgs) (
 	}, nil
 }
 
+// List no está soportado para RAR
 func (RarDecoder) List(ss []*stream.SeekableStream, args model.ArchiveInnerArgs) ([]model.Obj, error) {
 	return nil, errs.NotSupport
 }
 
+// Extract extrae un archivo específico desde el archivo RAR
 func (RarDecoder) Extract(ss []*stream.SeekableStream, args model.ArchiveInnerArgs) (io.ReadCloser, int64, error) {
 	reader, err := getReader(ss, args.Password)
 	if err != nil {
@@ -68,6 +100,7 @@ func (RarDecoder) Extract(ss []*stream.SeekableStream, args model.ArchiveInnerAr
 	return nil, 0, errs.ObjectNotFound
 }
 
+// Decompress descomprime los archivos en el archivo RAR
 func (RarDecoder) Decompress(ss []*stream.SeekableStream, outputPath string, args model.ArchiveInnerArgs, up model.UpdateProgress) error {
 	reader, err := getReader(ss, args.Password)
 	if err != nil {
