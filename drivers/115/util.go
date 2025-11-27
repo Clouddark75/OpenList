@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -24,9 +23,8 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 
-	cipher "github.com/SheltonZhu/115driver/pkg/crypto/ec115"
-	crypto "github.com/SheltonZhu/115driver/pkg/crypto/m115"
-	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
+	cipher "github.com/Clouddark75/115driver/pkg/crypto/ec115"
+	driver115 "github.com/Clouddark75/115driver/pkg/driver"
 	"github.com/pkg/errors"
 )
 
@@ -51,9 +49,8 @@ func (d *Pan115) login() error {
 		d.Cookie = fmt.Sprintf("UID=%s;CID=%s;SEID=%s;KID=%s", cr.UID, cr.CID, cr.SEID, cr.KID)
 		d.QRCodeToken = ""
 	} else if d.Cookie != "" {
-		if err = cr.FromCookie(d.Cookie); err != nil {
-			return errors.Wrap(err, "failed to login by cookies")
-		}
+		// feed the entire browser Cookie header verbatim
+		cr.RawCookie = d.Cookie
 		d.client.ImportCredential(cr)
 	} else {
 		return errors.New("missing cookie or qrcode account")
@@ -106,60 +103,6 @@ func (d *Pan115) getNewFileByPickCode(pickCode string) (*FileObj, error) {
 
 func (d *Pan115) getUA() string {
 	return fmt.Sprintf("Mozilla/5.0 115Browser/%s", appVer)
-}
-
-func (d *Pan115) DownloadWithUA(pickCode, ua string) (*driver115.DownloadInfo, error) {
-	key := crypto.GenerateKey()
-	result := driver115.DownloadResp{}
-	params, err := utils.Json.Marshal(map[string]string{"pick_code": pickCode})
-	if err != nil {
-		return nil, err
-	}
-
-	data := crypto.Encode(params, key)
-
-	bodyReader := strings.NewReader(url.Values{"data": []string{data}}.Encode())
-	reqUrl := fmt.Sprintf("%s?t=%s", driver115.AndroidApiDownloadGetUrl, driver115.Now().String())
-	req, _ := http.NewRequest(http.MethodPost, reqUrl, bodyReader)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Cookie", d.Cookie)
-	req.Header.Set("User-Agent", ua)
-
-	resp, err := d.client.Client.GetClient().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if err := utils.Json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-
-	if err = result.Err(string(body)); err != nil {
-		return nil, err
-	}
-
-	b, err := crypto.Decode(string(result.EncodedData), key)
-	if err != nil {
-		return nil, err
-	}
-
-	downloadInfo := struct {
-		Url string `json:"url"`
-	}{}
-	if err := utils.Json.Unmarshal(b, &downloadInfo); err != nil {
-		return nil, err
-	}
-
-	info := &driver115.DownloadInfo{}
-	info.PickCode = pickCode
-	info.Header = resp.Request.Header
-	info.Url.Url = downloadInfo.Url
-	return info, nil
 }
 
 func (c *Pan115) GenerateToken(fileID, preID, timeStamp, fileSize, signKey, signVal string) string {
