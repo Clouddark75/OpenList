@@ -10,7 +10,7 @@ import (
 	streamPkg "github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
+	driver115 "github.com/Clouddark75/115driver/pkg/driver"
 	"github.com/pkg/errors"
 	"golang.org/x/time/rate"
 )
@@ -68,7 +68,7 @@ func (d *Pan115) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 		return nil, err
 	}
 	userAgent := args.Header.Get("User-Agent")
-	downloadInfo, err := d.
+	downloadInfo, err := d.client.
 		DownloadWithUA(file.(*FileObj).PickCode, userAgent)
 	if err != nil {
 		return nil, err
