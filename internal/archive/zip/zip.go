@@ -24,23 +24,18 @@ func (z *Zip) AcceptedMultipartExtensions() map[string]tool.MultipartExtension {
 	return map[string]tool.MultipartExtension{
 		".zip": {
 			// Formato tradicional: archivo.zip, archivo.z01, archivo.z02
-			// La regex debe coincidir con AMBOS:
-			// - archivo.zip (sin grupo de número, se asume parte 0)
-			// - archivo.z01, archivo.z02, etc. (grupo 2 contiene el número)
 			// Grupo 1: nombre base (ej: "archivo")
-			// Grupo 2: número de parte o vacío (ej: "01", "02", o vacío para .zip)
-			PartFileFormat:  regexp.MustCompile(`^(.+)\.(zip|z(\d+))package zip
-
-),
+			// Grupo 2: número de parte (ej: "01", "02") - vacío para .zip
+			// NOTA: .zip es la primera parte (índice 0), .z01 es la segunda (índice 1)
+			PartFileFormat:  regexp.MustCompile(`^(.+)\.(zip|z(\d+))$`),
 			SecondPartIndex: 1, // .z01 es la parte 1 (segunda parte después de .zip)
-			BaseNameGroup:   1,
+			BaseNameGroup:   1, // El grupo 1 captura el nombre base
 		},
 		".zip.001": {
 			// Formato moderno: archivo.zip.001, archivo.zip.002
 			// Grupo 1: nombre base (ej: "archivo")
 			// Grupo 2: número de parte (ej: "001", "002")
-			PartFileFormat:  regexp.MustCompile(`^(.+)\.zip\.(\d+)package zip
-
+			PartFileFormat:  regexp.MustCompile(`^(.+)\.zip\.(\d+)$`),
 			SecondPartIndex: 2, // .zip.002 es la parte 2
 			BaseNameGroup:   1,
 		},
