@@ -19,7 +19,13 @@ func (SevenZip) AcceptedExtensions() []string {
 
 func (SevenZip) AcceptedMultipartExtensions() map[string]tool.MultipartExtension {
 	return map[string]tool.MultipartExtension{
-		".7z.001": {PartFileFormat: regexp.MustCompile(`^.*\.7z\.(\d+)$`), SecondPartIndex: 2},
+		".7z.001": {
+			// Grupo 1: nombre base (ej: "archivo")
+			// Grupo 2: número de parte (ej: "001", "002")
+			PartFileFormat:  regexp.MustCompile(`^(.+)\.7z\.(\d+)$`),
+			SecondPartIndex: 2,
+			BaseNameGroup:   1,
+		},
 	}
 }
 
