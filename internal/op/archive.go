@@ -121,7 +121,17 @@ func GetArchiveToolAndStream(ctx context.Context, storage driver.Driver, path st
 			}
 		}
 		
-		partIdx, e := strconv.Atoi(submatch[len(submatch)-1]) // Último grupo es siempre el número
+		// Obtener el índice de la parte
+		// Para ZIP tradicional: archivo.zip (parte 0), archivo.z01 (parte 1)
+		// El último grupo captura el número, o está vacío para .zip
+		var partIdx int
+		lastGroup := submatch[len(submatch)-1]
+		if lastGroup == "" {
+			// Es el archivo .zip principal (primera parte)
+			partIdx = 0
+		} else {
+			var e error
+			partIdx, e = strconv.Atoi(lastGroup)
 		if e != nil {
 			continue
 		}
