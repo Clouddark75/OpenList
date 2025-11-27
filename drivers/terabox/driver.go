@@ -7,9 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math"
 	stdpath "path"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -39,17 +40,35 @@ func (d *Terabox) GetAddition() driver.Additional {
 func (d *Terabox) Init(ctx context.Context) error {
 	var resp CheckLoginResp
 	d.base_url = "https://www.terabox.com"
-	d.url_domain_prefix = "jp"
+	d.url_domain_prefix = "jp"	
 	_, err := d.get("/api/check/login", nil, &resp)
 	if err != nil {
 		return err
 	}
-	if resp.Errno != 0 {
-		if resp.Errno == 9000 {
-			return fmt.Errorf("terabox is not yet available in this area")
-		}
-		return fmt.Errorf("failed to check login status according to cookie")
-	}
+	
+	// Check login status with retry
+	err = retry.Do(
+		func() error {
+			_, err := d.get("/api/check/login", nil, &resp)
+			if err != nil {
+				return err
+			}
+			if resp.Errno != 0 {
+				if resp.Errno == 9000 {
+					return retry.Unrecoverable(fmt.Errorf("terabox is not yet available in this area"))
+				}
+				return fmt.Errorf("failed to check login status according to cookie")
+			}
+			return nil
+		},
+		retry.Attempts(uint(d.getRetryCount())),
+		retry.Delay(time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.OnRetry(func(n uint, err error) {
+			log.Warnf("Failed to check login status (attempt %d): %v", n+1, err)
+		}),
+	)
+	
 	return err
 }
 
@@ -68,10 +87,25 @@ func (d *Terabox) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 }
 
 func (d *Terabox) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	if d.DownloadAPI == "crack" {
-		return d.linkCrack(file, args)
-	}
-	return d.linkOfficial(file, args)
+	var link *model.Link
+	err := retry.Do(
+		func() error {
+			var err error
+			if d.DownloadAPI == "crack" {
+				link, err = d.linkCrack(file, args)
+			} else {
+				link, err = d.linkOfficial(file, args)
+			}
+			return err
+		},
+		retry.Attempts(uint(d.getRetryCount())),
+		retry.Delay(time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.OnRetry(func(n uint, err error) {
+			log.Warnf("Failed to get download link (attempt %d): %v", n+1, err)
+		}),
+	)
+	return link, err
 }
 
 func (d *Terabox) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
@@ -101,35 +135,99 @@ func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 }
 
 func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
-	data := []base.Json{
-		{
-			"path":    srcObj.GetPath(),
-			"newname": newName,
+	return retry.Do(
+		func() error {
+			// Ensure jsToken is available for rename operation
+			if err := d.ensureJsToken(); err != nil {
+				return fmt.Errorf("failed to get jsToken for rename: %v", err)
+			}
+			
+			data := []base.Json{
+				{
+					"path":    srcObj.GetPath(),
+					"newname": newName,
+				},
+			}
+			_, err := d.manage("rename", data)
+			return err
 		},
-	}
-	_, err := d.manage("rename", data)
-	return err
+		retry.Attempts(uint(d.getRetryCount())),
+		retry.Delay(time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.OnRetry(func(n uint, err error) {
+			log.Warnf("Failed to rename file (attempt %d): %v", n+1, err)
+		}),
+	)
 }
 
 func (d *Terabox) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
-	data := []base.Json{
-		{
-			"path":    srcObj.GetPath(),
-			"dest":    dstDir.GetPath(),
-			"newname": srcObj.GetName(),
+	return retry.Do(
+		func() error {
+			// Ensure jsToken is available for copy operation
+			if err := d.ensureJsToken(); err != nil {
+				return fmt.Errorf("failed to get jsToken for copy: %v", err)
+			}
+			
+			data := []base.Json{
+				{
+					"path":    srcObj.GetPath(),
+					"dest":    dstDir.GetPath(),
+					"newname": srcObj.GetName(),
+				},
+			}
+			_, err := d.manage("copy", data)
+			return err
 		},
-	}
-	_, err := d.manage("copy", data)
-	return err
+		retry.Attempts(uint(d.getRetryCount())),
+		retry.Delay(time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.OnRetry(func(n uint, err error) {
+			log.Warnf("Failed to copy file (attempt %d): %v", n+1, err)
+		}),
+	)
 }
 
 func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
-	data := []string{obj.GetPath()}
-	_, err := d.manage("delete", data)
-	return err
+	return retry.Do(
+		func() error {
+			// Ensure jsToken is available for delete operation
+			if err := d.ensureJsToken(); err != nil {
+				return fmt.Errorf("failed to get jsToken for remove: %v", err)
+			}
+			
+			data := []string{obj.GetPath()}
+			_, err := d.manage("delete", data)
+			return err
+		},
+		retry.Attempts(uint(d.getRetryCount())),
+		retry.Delay(time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.OnRetry(func(n uint, err error) {
+			log.Warnf("Failed to remove file (attempt %d): %v", n+1, err)
+		}),
+	)
 }
 
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+	return retry.Do(
+		func() error {
+			return d.putWithRetry(ctx, dstDir, stream, up)
+		},
+		retry.Attempts(uint(d.getRetryCount())),
+		retry.Delay(2*time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.OnRetry(func(n uint, err error) {
+			log.Warnf("Failed to upload file (attempt %d): %v", n+1, err)
+		}),
+	)
+}
+
+func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+	// Ensure jsToken is available before upload
+	if err := d.ensureJsToken(); err != nil {
+		return fmt.Errorf("failed to get jsToken for upload: %v", err)
+	}
+	
 	resp, err := base.RestyClient.R().
 		SetContext(ctx).
 		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
@@ -147,6 +245,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	// precreate file
 	rawPath := stdpath.Join(dstDir.GetPath(), stream.GetName())
 	path := encodeURIComponent(rawPath)
+	streamSize := stream.GetSize()
 
 	var precreateBlockListStr string
 	if stream.GetSize() > initialChunkSize {
@@ -160,6 +259,7 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		"autoinit":              "1",
 		"target_path":           dstDir.GetPath(),
 		"block_list":            precreateBlockListStr,
+		"size":                  strconv.FormatInt(stream.GetSize(), 10),
 		"local_mtime":           strconv.FormatInt(stream.ModTime().Unix(), 10),
 		"file_limit_switch_v34": "true",
 	}
@@ -178,82 +278,60 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 		return nil
 	}
 
-	// upload chunks
+	// upload chunks with threading
 	tempFile, err := stream.CacheFullAndWriter(&up, nil)
 	if err != nil {
 		return err
 	}
 
 	params := map[string]string{
-		"method":   "upload",
-		"path":     path,
-		"uploadid": precreateResp.Uploadid,
+		"method":     "upload",
+		"path":       path,
+		"uploadid":   precreateResp.Uploadid,
+		"app_id":     "250528",
+		"web":        "1",
+		"channel":    "dubox",
+		"clienttype": "0",
+		"uploadsign": "0",
 	}
 
-	streamSize := stream.GetSize()
 	chunkSize := calculateChunkSize(streamSize)
-	chunkByteData := make([]byte, chunkSize)
-	count := int(math.Ceil(float64(streamSize) / float64(chunkSize)))
-	left := streamSize
-	uploadBlockList := make([]string, 0, count)
-	h := md5.New()
+	count := int((streamSize + chunkSize - 1) / chunkSize) // cálculo entero más eficiente
+	
+	// Get upload threads setting with default value of 2
+	uploadThreads := d.UploadThreads
+	if uploadThreads <= 0 {
+		uploadThreads = 2
+	}
+	// Limit max threads to prevent overwhelming the server
+	if uploadThreads > 10 {
+		uploadThreads = 10
+	}
+	
+	log.Infof("Starting threaded upload with %d threads for %d chunks", uploadThreads, count)
 
-	for partseq := 0; partseq < count; partseq++ {
-		if utils.IsCanceled(ctx) {
-			return ctx.Err()
-		}
+	// Prepare chunks info
+	chunks := make([]ChunkInfo, count)
+	left := streamSize
+	for i := 0; i < count; i++ {
 		byteSize := chunkSize
-		var byteData []byte
-		if left >= chunkSize {
-			byteData = chunkByteData
-		} else {
+		if left < chunkSize {
 			byteSize = left
-			byteData = make([]byte, byteSize)
+		}
+		chunks[i] = ChunkInfo{
+			Index:  i,
+			Offset: int64(i) * chunkSize,
+			Size:   byteSize,
 		}
 		left -= byteSize
-		_, err = io.ReadFull(tempFile, byteData)
-		if err != nil {
-			return err
-		}
+	}
 
-		// calculate md5
-		h.Write(byteData)
-		localMD5 := hex.EncodeToString(h.Sum(nil))
-		uploadBlockList = append(uploadBlockList, localMD5)
-		h.Reset()
-
-		u := "https://" + locateupload_resp.Host + "/rest/2.0/pcs/superfile2"
-		params["partseq"] = strconv.Itoa(partseq)
-		log.Debugf("%+v", params)
-
-		err = retry.Do(
-			func() error {
-				fileReader := driver.NewLimitedUploadStream(ctx, bytes.NewReader(byteData))
-				res, err := d.post_multipart(u, params, "file", stream.GetName(), fileReader, nil)
-				log.Debugln(string(res))
-				if err != nil {
-					return err
-				}
-
-				rspmd5 := utils.Json.Get(res, "md5").ToString()
-				if localMD5 != rspmd5 {
-					log.Debugf("MD5 mismatch, our MD5: %s, server: %s", localMD5, rspmd5)
-					return fmt.Errorf("MD5 mismatch")
-				}
-				return nil
-			},
-			retry.Attempts(5),
-			retry.DelayType(retry.FixedDelay),
-			retry.Context(ctx),
-		)
-
-		if err != nil {
-			return err
-		}
-
-		if count > 0 {
-			up(float64(partseq) * 100 / float64(count))
-		}
+	// Upload chunks with threading and retry
+	uploadBlockList := make([]string, count)
+	err = d.uploadChunksThreaded(ctx, tempFile, chunks, uploadBlockList, locateupload_resp.Host, 
+		params, stream.GetName(), uploadThreads, up)
+	if err != nil {
+		return err
 	}
 
 	// create file
@@ -283,7 +361,187 @@ func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileSt
 	if createResp.Errno != 0 {
 		return fmt.Errorf("[terabox] failed to create file, errno: %d", createResp.Errno)
 	}
+	time.Sleep(time.Duration(len(precreateResp.BlockList)/16+5) * time.Second)
 	return nil
 }
 
+func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt, chunks []ChunkInfo, 
+	uploadBlockList []string, host string, params map[string]string, fileName string, 
+	uploadThreads int, up driver.UpdateProgress) error {
+	
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var uploadErr error
+	
+	// Channel to limit concurrent uploads
+	semaphore := make(chan struct{}, uploadThreads)
+	
+	// Progress tracking
+	completedChunks := 0
+	totalChunks := len(chunks)
+	
+	for i := range chunks {
+		if utils.IsCanceled(ctx) {
+			return ctx.Err()
+		}
+		
+		wg.Add(1)
+		go func(chunkIndex int) {
+			defer wg.Done()
+			
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			
+			chunk := chunks[chunkIndex]
+			
+			// Use retry-go for chunk upload
+			chunkErr := retry.Do(
+				func() error {
+					if utils.IsCanceled(ctx) {
+						return retry.Unrecoverable(ctx.Err())
+					}
+					
+					return d.uploadSingleChunk(ctx, tempFile, chunk, host, params, fileName, 
+						func(md5Hash string) {
+							mu.Lock()
+							uploadBlockList[chunkIndex] = md5Hash
+							completedChunks++
+							progress := float64(completedChunks) * 100.0 / float64(totalChunks)
+							mu.Unlock()
+							
+							if up != nil {
+								up(progress)
+							}
+						})
+				},
+				retry.Attempts(uint(d.getRetryCount())),
+				retry.Delay(time.Second),
+				retry.DelayType(retry.BackOffDelay),
+				retry.OnRetry(func(n uint, err error) {
+					log.Warnf("Chunk %d upload failed (attempt %d): %v", chunkIndex, n+1, err)
+				}),
+			)
+			
+			if chunkErr != nil {
+				mu.Lock()
+				if uploadErr == nil {
+					uploadErr = fmt.Errorf("chunk %d upload failed after retries: %v", chunkIndex, chunkErr)
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	return uploadErr
+}
+
+func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, chunk ChunkInfo, 
+	host string, params map[string]string, fileName string, onSuccess func(string)) error {
+	
+	// Read chunk data
+	chunkData := make([]byte, chunk.Size)
+	_, err := tempFile.ReadAt(chunkData, chunk.Offset)
+	if err != nil {
+		return fmt.Errorf("failed to read chunk data: %v", err)
+	}
+	
+	// Calculate MD5 hash
+	h := md5.New()
+	h.Write(chunkData)
+	md5Hash := hex.EncodeToString(h.Sum(nil))
+	
+	// Upload chunk
+	u := "https://" + host + "/rest/2.0/pcs/superfile2"
+	uploadParams := make(map[string]string)
+	for k, v := range params {
+		uploadParams[k] = v
+	}
+	uploadParams["partseq"] = strconv.Itoa(chunk.Index)
+	
+	// Create a context with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	
+	res, err := base.RestyClient.R().
+		SetContext(timeoutCtx).
+		SetQueryParams(uploadParams).
+		SetFileReader("file", fileName, bytes.NewReader(chunkData)).
+		SetHeader("Cookie", d.Cookie).
+		Post(u)
+	
+	if err != nil {
+		return fmt.Errorf("HTTP request failed: %v", err)
+	}
+	
+	if res.StatusCode() != 200 {
+		return fmt.Errorf("HTTP status %d: %s", res.StatusCode(), res.String())
+	}
+	
+	// Check response for errors
+	responseBody := res.String()
+	if responseBody != "" {
+		errno := utils.Json.Get([]byte(responseBody), "errno").ToInt()
+		if errno != 0 {
+			return fmt.Errorf("upload error, errno: %d, response: %s", errno, responseBody)
+		}
+	}
+	
+	log.Debugf("Chunk %d uploaded successfully (size: %d bytes)", chunk.Index, chunk.Size)
+	onSuccess(md5Hash)
+	return nil
+}
+
+// Helper function to get retry count from config
+func (d *Terabox) getRetryCount() int {
+	if d.RetryCount <= 0 {
+		return 10 // default
+	}
+	if d.RetryCount > 10 {
+		return 10 // max limit
+	}
+	return d.RetryCount
+}
+
+func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	var quotaResp QuotaResp
+	_, err := d.get("/api/quota", nil, &quotaResp)
+	if err != nil {
+		return nil, err
+	}
+	
+	if quotaResp.Errno != 0 {
+		return nil, fmt.Errorf("[terabox] failed to get quota, errno: %d", quotaResp.Errno)
+	}
+	
+	// Round to GiB for display consistency.
+    // Terabox shows 2173253451776 bytes as "2024 GB".
+    // We’ll make OpenList display a rounded number visually (GiB base),
+    // but keep the byte count accurate internally.
+    const gib = uint64(1024 * 1024 * 1024)
+
+    // Convert quota to GiB (rounded)
+    totalGiB := (uint64(quotaResp.Total) + gib/2) / gib
+    usedGiB := (uint64(quotaResp.Used) + gib/2) / gib
+
+    // Convert back to bytes
+    total := totalGiB * gib
+    used := usedGiB * gib
+
+    // Protect against underflow if used > total
+    var free uint64
+    if used > total {
+        free = 0
+    } else {
+        free = total - used
+    }
+
+    return &model.StorageDetails{
+        DiskUsage: model.DiskUsage{
+           TotalSpace: total,
+           FreeSpace:  free,
+        },
+    }, nil
+}
 var _ driver.Driver = (*Terabox)(nil)
