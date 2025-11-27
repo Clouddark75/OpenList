@@ -42,17 +42,15 @@ func (RarDecoder) GroupMultipartFiles(ss []*stream.SeekableStream) (map[string][
 			partNum := matches[2] // Número de la parte
 			groupKey := base // Agrupamos por el nombre base
 			groups[groupKey] = append(groups[groupKey], s) // Añadimos el archivo al grupo correspondiente
-		}
-	}
 
-	// Ordenamos las partes dentro de cada grupo por el número de parte
-	for key, parts := range groups {
-		sort.Slice(parts, func(i, j int) bool {
-			// Comparamos el número de parte extraído del nombre del archivo
-			partI := partRegex.FindStringSubmatch(parts[i].GetName())[2]
-			partJ := partRegex.FindStringSubmatch(parts[j].GetName())[2]
-			return partI < partJ
-		})
+			// Ordenar las partes dentro del grupo por su número de parte
+			sort.SliceStable(groups[groupKey], func(i, j int) bool {
+				// Comparamos el número de parte extraído del nombre del archivo
+				partI := partRegex.FindStringSubmatch(groups[groupKey][i].GetName())[2]
+				partJ := partRegex.FindStringSubmatch(groups[groupKey][j].GetName())[2]
+				return partI < partJ
+			})
+		}
 	}
 	return groups, nil
 }
