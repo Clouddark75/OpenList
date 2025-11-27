@@ -15,6 +15,8 @@ import (
 	"github.com/nwaples/rardecode/v2"
 )
 
+var partRegex = regexp.MustCompile(`^.*\.part(\d+)\.rar$`)
+
 type RarDecoder struct{}
 
 // AcceptedExtensions devuelve las extensiones aceptadas para archivos RAR
@@ -25,7 +27,7 @@ func (RarDecoder) AcceptedExtensions() []string {
 // AcceptedMultipartExtensions devuelve las extensiones aceptadas para archivos multipart RAR
 func (RarDecoder) AcceptedMultipartExtensions() map[string]tool.MultipartExtension {
 	return map[string]tool.MultipartExtension{
-		".part1.rar": {PartFileFormat: regexp.MustCompile(`^.*\.part(\d+)\.rar$`), SecondPartIndex: 2}, // Regex para las partes rar
+		".part1.rar": {PartFileFormat: partRegex, SecondPartIndex: 2}, // Regex para las partes rar
 	}
 }
 
@@ -34,10 +36,10 @@ func (RarDecoder) GroupMultipartFiles(ss []*stream.SeekableStream) (map[string][
 	groups := make(map[string][]*stream.SeekableStream)
 	// Agrupar los archivos por basename y número de parte
 	for _, s := range ss {
-		matches := partRegex.FindStringSubmatch(s.Name)
+		matches := partRegex.FindStringSubmatch(s.GetName()) // Aquí usamos GetName() en lugar de Name
 		if matches != nil {
-			base := matches[partRegex.SubexpIndex("base")]
-			partNum := matches[partRegex.SubexpIndex("num")]
+			base := matches[1] // Nombre base
+			partNum := matches[2] // Número de la parte
 			groupKey := base // Agrupamos por el nombre base
 			groups[groupKey] = append(groups[groupKey], s) // Añadimos el archivo al grupo correspondiente
 		}
@@ -47,8 +49,8 @@ func (RarDecoder) GroupMultipartFiles(ss []*stream.SeekableStream) (map[string][
 	for key, parts := range groups {
 		sort.Slice(parts, func(i, j int) bool {
 			// Comparamos el número de parte extraído del nombre del archivo
-			partI := partRegex.FindStringSubmatch(parts[i].Name)[partRegex.SubexpIndex("num")]
-			partJ := partRegex.FindStringSubmatch(parts[j].Name)[partRegex.SubexpIndex("num")]
+			partI := partRegex.FindStringSubmatch(parts[i].GetName())[2]
+			partJ := partRegex.FindStringSubmatch(parts[j].GetName())[2]
 			return partI < partJ
 		})
 	}
