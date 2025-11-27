@@ -94,17 +94,34 @@ func GetArchiveToolAndStream(ctx context.Context, storage driver.Driver, path st
 	}
 
 	// Merge multi-part archive
+	// IMPORTANTE: Extraer el nombre base del archivo ACTUAL primero
+	currentFileBaseName := ""
+	currentSubmatch := partExt.PartFileFormat.FindStringSubmatch(obj.GetName())
+	if currentSubmatch != nil && len(currentSubmatch) > partExt.BaseNameGroup {
+		currentFileBaseName = currentSubmatch[partExt.BaseNameGroup]
+	}
+	
 	dir := stdpath.Dir(path)
 	objs, err := List(ctx, storage, dir, model.ListArgs{})
 	if err != nil {
 		return obj, t, ret, nil
 	}
+	
 	for _, o := range objs {
 		submatch := partExt.PartFileFormat.FindStringSubmatch(o.GetName())
 		if submatch == nil {
 			continue
 		}
-		partIdx, e := strconv.Atoi(submatch[1])
+		
+		// CRÍTICO: Verificar que el nombre base coincida con el archivo actual
+		if len(submatch) > partExt.BaseNameGroup {
+			baseName := submatch[partExt.BaseNameGroup]
+			if baseName != currentFileBaseName {
+				continue // Ignorar archivos de otros conjuntos multipart
+			}
+		}
+		
+		partIdx, e := strconv.Atoi(submatch[len(submatch)-1]) // Último grupo es siempre el número
 		if e != nil {
 			continue
 		}
@@ -129,6 +146,7 @@ func GetArchiveToolAndStream(ctx context.Context, storage driver.Driver, path st
 		}
 		ret[partIdx] = ss1
 	}
+	
 	closeAll := func(r []*stream.SeekableStream) {
 		for _, s := range r {
 			if s != nil {
