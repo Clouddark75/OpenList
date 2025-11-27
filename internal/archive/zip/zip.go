@@ -22,8 +22,20 @@ func (z *Zip) AcceptedExtensions() []string {
 
 func (z *Zip) AcceptedMultipartExtensions() map[string]tool.MultipartExtension {
 	return map[string]tool.MultipartExtension{
-		".zip":     {PartFileFormat: regexp.MustCompile(`^.*\.z(\d+)$`), SecondPartIndex: 1},
-		".zip.001": {PartFileFormat: regexp.MustCompile(`^.*\.zip\.(\d+)$`), SecondPartIndex: 2},
+		".zip": {
+			// Grupo 1: nombre base (ej: "archivo")
+			// Grupo 2: número de parte (ej: "01", "02")
+			PartFileFormat:  regexp.MustCompile(`^(.+)\.z(\d+)$`),
+			SecondPartIndex: 1,
+			BaseNameGroup:   1,
+		},
+		".zip.001": {
+			// Grupo 1: nombre base (ej: "archivo")
+			// Grupo 2: número de parte (ej: "001", "002")
+			PartFileFormat:  regexp.MustCompile(`^(.+)\.zip\.(\d+)$`),
+			SecondPartIndex: 2,
+			BaseNameGroup:   1,
+		},
 	}
 }
 
