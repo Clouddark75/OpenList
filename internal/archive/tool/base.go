@@ -11,6 +11,7 @@ import (
 type MultipartExtension struct {
 	PartFileFormat  *regexp.Regexp
 	SecondPartIndex int
+	BaseNameGroup   int // Índice del grupo de captura que contiene el nombre base del archivo
 }
 
 type Tool interface {
