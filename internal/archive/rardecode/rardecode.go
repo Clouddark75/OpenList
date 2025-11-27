@@ -39,7 +39,6 @@ func (RarDecoder) GroupMultipartFiles(ss []*stream.SeekableStream) (map[string][
 		matches := partRegex.FindStringSubmatch(s.GetName()) // Aquí usamos GetName() en lugar de Name
 		if matches != nil {
 			base := matches[1] // Nombre base
-			partNum := matches[2] // Número de la parte
 			groupKey := base // Agrupamos por el nombre base
 			groups[groupKey] = append(groups[groupKey], s) // Añadimos el archivo al grupo correspondiente
 
