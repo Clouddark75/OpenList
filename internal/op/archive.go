@@ -125,25 +125,21 @@ func GetArchiveToolAndStream(ctx context.Context, storage driver.Driver, path st
 		// Para ZIP tradicional: archivo.zip (parte 0), archivo.z01 (parte 1)
 		// El último grupo captura el número, o está vacío para .zip
 		var partIdx int
-		lastGroup := submatch[len(submatch)-1]
-		if lastGroup == "" {
-			// Es el archivo .zip principal (primera parte)
-			var partIdx int
-		lastGroup := submatch[len(submatch)-1]
-		if lastGroup == "" {
-			// Es el archivo .zip principal (primera parte)
-			partIdx = 0
-		} else {
-			var e error
-			partIdx, e = strconv.Atoi(lastGroup)
-			if e != nil {
-				continue
-			}
-		}
-		partIdx = partIdx - partExt.SecondPartIndex + 1
-		if partIdx < 1 {
-			continue
-		}
+lastGroup := submatch[len(submatch)-1]
+if lastGroup == "" {
+	// Es el archivo .zip principal (primera parte)
+	partIdx = 0
+} else {
+	var e error
+	partIdx, e = strconv.Atoi(lastGroup)
+	if e != nil {
+		continue
+	}
+	partIdx = partIdx - partExt.SecondPartIndex + 1
+}
+if partIdx < 1 {
+	continue
+}
 		p := stdpath.Join(dir, o.GetName())
 		l1, o1, e := Link(ctx, storage, p, args)
 		if e != nil {
