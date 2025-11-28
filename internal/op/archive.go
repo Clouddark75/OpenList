@@ -128,12 +128,17 @@ func GetArchiveToolAndStream(ctx context.Context, storage driver.Driver, path st
 		lastGroup := submatch[len(submatch)-1]
 		if lastGroup == "" {
 			// Es el archivo .zip principal (primera parte)
+			var partIdx int
+		lastGroup := submatch[len(submatch)-1]
+		if lastGroup == "" {
+			// Es el archivo .zip principal (primera parte)
 			partIdx = 0
 		} else {
 			var e error
 			partIdx, e = strconv.Atoi(lastGroup)
-		if e != nil {
-			continue
+			if e != nil {
+				continue
+			}
 		}
 		partIdx = partIdx - partExt.SecondPartIndex + 1
 		if partIdx < 1 {
