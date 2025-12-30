@@ -36,7 +36,7 @@ require (
 	github.com/dustinxie/ecc v0.0.0-20210511000915-959544187564
 	github.com/fclairamb/ftpserverlib v0.26.1-0.20250709223522-4a925d79caf6
 	github.com/foxxorcat/mopan-sdk-go v0.1.6
-	github.com/foxxorcat/weiyun-sdk-go v0.1.3
+	github.com/foxxorcat/weiyun-sdk-go v0.1.4
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-resty/resty/v2 v2.16.5
@@ -44,7 +44,7 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/halalcloud/golang-sdk-lite v0.0.0-20251006164234-3c629727c499
+	github.com/halalcloud/golang-sdk-lite v0.0.0-20251105081800-78cbb6786c38
 	github.com/hekmon/transmissionrpc/v3 v3.0.0
 	github.com/henrybear327/go-proton-api v1.0.0
 	github.com/ipfs/go-ipfs-api v0.7.0
