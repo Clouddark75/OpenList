@@ -103,7 +103,11 @@ func (o ObjStorageDetails) GetStorageDetails() *StorageDetailsWithName {
 
 func GetStorageDetails(obj Obj) (*StorageDetailsWithName, bool) {
 	if obj, ok := obj.(ObjWithStorageDetails); ok {
-		return obj.GetStorageDetails(), true
+		details := obj.GetStorageDetails()
+		if details == nil || details.StorageDetails == nil {
+			return nil, false
+		}
+		return details, true
 	}
 	if unwrap, ok := obj.(ObjUnwrap); ok {
 		return GetStorageDetails(unwrap.Unwrap())
