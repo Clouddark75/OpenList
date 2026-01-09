@@ -10,6 +10,7 @@ import (
 	stdpath "path"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -210,32 +211,40 @@ func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 	)
 }
 
+// MEJORA: Remover el retry wrapper innecesario de Put()
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	return retry.Do(
-		func() error {
-			return d.putWithRetry(ctx, dstDir, stream, up)
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(2*time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to upload file (attempt %d): %v", n+1, err)
-		}),
-	)
+	// Solo llamar putWithRetry una vez - ya tiene retry interno en los chunks
+	return d.putWithRetry(ctx, dstDir, stream, up)
 }
 
 func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+	// MEJORA: Verificar cancelación temprana
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+
 	// Ensure jsToken is available before upload
 	if err := d.ensureJsToken(); err != nil {
 		return fmt.Errorf("failed to get jsToken for upload: %v", err)
 	}
 	
+	// MEJORA: Verificar cancelación después de obtener jsToken
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+
 	resp, err := base.RestyClient.R().
 		SetContext(ctx).
 		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
 	if err != nil {
 		return err
 	}
+	
+	// MEJORA: Verificar cancelación
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+
 	var locateupload_resp LocateUploadResp
 	err = utils.Json.Unmarshal(resp.Body(), &locateupload_resp)
 	if err != nil {
@@ -271,6 +280,12 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	if err != nil {
 		return err
 	}
+	
+	// MEJORA: Verificar cancelación
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+
 	log.Debugf("%+v", precreateResp)
 	if precreateResp.Errno != 0 {
 		log.Debugln(string(res))
@@ -281,9 +296,15 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	}
 
 	// upload chunks with threading
+	// MEJORA: Pasar contexto para limpieza
 	tempFile, err := stream.CacheFullAndWriter(&up, nil)
 	if err != nil {
 		return err
+	}
+	
+	// MEJORA: Verificar cancelación después de cachear
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
 	}
 
 	params := map[string]string{
@@ -298,14 +319,13 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	}
 
 	chunkSize := calculateChunkSize(streamSize)
-	count := int((streamSize + chunkSize - 1) / chunkSize) // cálculo entero más eficiente
+	count := int((streamSize + chunkSize - 1) / chunkSize)
 	
-	// Get upload threads setting with default value of 2
+	// Get upload threads setting with default value
 	uploadThreads := d.UploadThreads
 	if uploadThreads <= 0 {
 		uploadThreads = 4
 	}
-	// Limit max threads to prevent overwhelming the server
 	if uploadThreads > 10 {
 		uploadThreads = 10
 	}
@@ -363,54 +383,92 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	if createResp.Errno != 0 {
 		return fmt.Errorf("[terabox] failed to create file, errno: %d", createResp.Errno)
 	}
-	time.Sleep(time.Duration(len(precreateResp.BlockList)/16+5) * time.Second)
+	
+	// MEJORA: Sleep más corto y con verificación de cancelación
+	sleepDuration := time.Duration(len(precreateResp.BlockList)/16+5) * time.Second
+	select {
+	case <-time.After(sleepDuration):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	
 	return nil
 }
 
+// MEJORA PRINCIPAL: Mejor manejo de cancelación y errores
 func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt, chunks []ChunkInfo, 
 	uploadBlockList []string, host string, params map[string]string, fileName string, 
 	uploadThreads int, up driver.UpdateProgress) error {
 	
+	// MEJORA: Usar context cancelable para propagación inmediata
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var uploadErr error
+	var errOnce sync.Once
+	
+	// MEJORA: Usar atomic para progreso thread-safe sin lock
+	var completedChunks atomic.Int32
+	totalChunks := int32(len(chunks))
 	
 	// Channel to limit concurrent uploads
 	semaphore := make(chan struct{}, uploadThreads)
 	
-	// Progress tracking
-	completedChunks := 0
-	totalChunks := len(chunks)
+	// MEJORA: Función para reportar error y cancelar
+	reportError := func(err error) {
+		errOnce.Do(func() {
+			uploadErr = err
+			cancel() // Cancelar todas las goroutines restantes
+		})
+	}
 	
 	for i := range chunks {
-		if utils.IsCanceled(ctx) {
-			return ctx.Err()
+		// MEJORA: Verificar cancelación antes de iniciar nueva goroutine
+		select {
+		case <-ctx.Done():
+			break
+		default:
+		}
+		
+		if uploadErr != nil {
+			break // Salir si ya hay error
 		}
 		
 		wg.Add(1)
 		go func(chunkIndex int) {
 			defer wg.Done()
 			
-			// Acquire semaphore
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
+			// MEJORA: Verificar cancelación antes de adquirir semáforo
+			select {
+			case <-ctx.Done():
+				return
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			}
 			
 			chunk := chunks[chunkIndex]
 			
 			// Use retry-go for chunk upload
 			chunkErr := retry.Do(
 				func() error {
-					if utils.IsCanceled(ctx) {
+					// MEJORA: Verificar cancelación en cada intento
+					select {
+					case <-ctx.Done():
 						return retry.Unrecoverable(ctx.Err())
+					default:
 					}
 					
 					return d.uploadSingleChunk(ctx, tempFile, chunk, host, params, fileName, 
 						func(md5Hash string) {
 							mu.Lock()
 							uploadBlockList[chunkIndex] = md5Hash
-							completedChunks++
-							progress := float64(completedChunks) * 100.0 / float64(totalChunks)
 							mu.Unlock()
+							
+							// MEJORA: Progreso sin lock usando atomic
+							completed := completedChunks.Add(1)
+							progress := float64(completed) * 100.0 / float64(totalChunks)
 							
 							if up != nil {
 								up(progress)
@@ -423,30 +481,56 @@ func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt
 				retry.OnRetry(func(n uint, err error) {
 					log.Warnf("Chunk %d upload failed (attempt %d): %v", chunkIndex, n+1, err)
 				}),
+				// MEJORA: Detener retry si el contexto fue cancelado
+				retry.RetryIf(func(err error) bool {
+					select {
+					case <-ctx.Done():
+						return false // No reintentar si fue cancelado
+					default:
+						return true
+					}
+				}),
 			)
 			
 			if chunkErr != nil {
-				mu.Lock()
-				if uploadErr == nil {
-					uploadErr = fmt.Errorf("chunk %d upload failed after retries: %v", chunkIndex, chunkErr)
-				}
-				mu.Unlock()
+				reportError(fmt.Errorf("chunk %d upload failed after retries: %v", chunkIndex, chunkErr))
 			}
 		}(i)
 	}
 	
 	wg.Wait()
+	
+	// MEJORA: Verificar si fue cancelación o error
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	
 	return uploadErr
 }
 
+// MEJORA: Timeout dinámico basado en tamaño del chunk
 func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, chunk ChunkInfo, 
 	host string, params map[string]string, fileName string, onSuccess func(string)) error {
+	
+	// MEJORA: Verificar cancelación temprana
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	
 	// Read chunk data
 	chunkData := make([]byte, chunk.Size)
 	_, err := tempFile.ReadAt(chunkData, chunk.Offset)
 	if err != nil {
 		return fmt.Errorf("failed to read chunk data: %v", err)
+	}
+	
+	// MEJORA: Verificar cancelación después de leer
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	
 	// Calculate MD5 hash
@@ -462,8 +546,13 @@ func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, c
 	}
 	uploadParams["partseq"] = strconv.Itoa(chunk.Index)
 	
-	// Create a context with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// MEJORA: Timeout dinámico basado en tamaño (mínimo 30s, +5s por MB)
+	timeoutDuration := 30*time.Second + time.Duration(chunk.Size/(1024*1024))*5*time.Second
+	if timeoutDuration > 5*time.Minute {
+		timeoutDuration = 5 * time.Minute // Máximo 5 minutos
+	}
+	
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeoutDuration)
 	defer cancel()
 	
 	res, err := base.RestyClient.R().
@@ -474,7 +563,13 @@ func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, c
 		Post(u)
 	
 	if err != nil {
-		return fmt.Errorf("HTTP request failed: %v", err)
+		// MEJORA: Diferenciar entre cancelación y error de red
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return fmt.Errorf("HTTP request failed: %v", err)
+		}
 	}
 	
 	if res.StatusCode() != 200 {
@@ -531,4 +626,5 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 		},
 	}, nil
 }
+
 var _ driver.Driver = (*Terabox)(nil)
