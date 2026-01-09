@@ -2,6 +2,7 @@ package terabox
 
 import (
 	"encoding/base64"
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
