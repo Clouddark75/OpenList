@@ -553,20 +553,6 @@ waitForCompletion:
 	return uploadErr
 }
 
-// MEJORA: Helper para formatear bytes en formato legible
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
-
 // MEJORA: Timeout dinámico basado en tamaño del chunk
 func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, chunk ChunkInfo, 
 	host string, params map[string]string, fileName string, onSuccess func(string)) error {
