@@ -149,3 +149,30 @@ func formatBytes(bytes int64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
+
+
+// UploadStats (opcional) - para tracking avanzado de velocidad
+type UploadStats struct {
+	StartTime       time.Time
+	UploadedBytes   int64
+	TotalBytes      int64
+	LastUpdateTime  time.Time
+	LastUpdateBytes int64
+}
+
+func (s *UploadStats) GetSpeed() int64 {
+	elapsed := time.Since(s.StartTime).Seconds()
+	if elapsed > 0 {
+		return int64(float64(s.UploadedBytes) / elapsed)
+	}
+	return 0
+}
+
+func (s *UploadStats) GetETA() time.Duration {
+	speed := s.GetSpeed()
+	if speed > 0 {
+		remaining := s.TotalBytes - s.UploadedBytes
+		return time.Duration(float64(remaining)/float64(speed)) * time.Second
+	}
+	return 0
+}
