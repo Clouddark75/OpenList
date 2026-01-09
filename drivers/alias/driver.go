@@ -174,7 +174,6 @@ func (d *Alias) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 	if !ok {
 		return d.listRoot(ctx, args.WithStorageDetails && d.DetailsPassThrough, args.Refresh), nil
 	}
-
 	// 因为alias是NoCache且Get方法不会返回NotSupport或NotImplement错误
 	// 所以这里对象不会传回到alias，也就不需要返回BalancedObjs了
 	objMap := make(map[string]model.Obj)
@@ -216,12 +215,11 @@ func (d *Alias) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 			} else {
 				objRet = &objRes
 			}
-            if details, ok := model.GetStorageDetails(obj); ok && details != nil && details.StorageDetails != nil {
-                objRet = &model.ObjStorageDetails{
-                    Obj:                    objRet,
-                    StorageDetailsWithName: *details,
-                }
-            }
+			if details, ok := model.GetStorageDetails(obj); ok && details != nil && details.StorageDetails != nil {
+				objRet = &model.ObjStorageDetails{
+					Obj:                    objRet,
+					StorageDetailsWithName: *details,
+				}
 			}
 			objMap[name] = objRet
 		}
