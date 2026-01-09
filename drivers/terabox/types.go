@@ -1,3 +1,5 @@
+package terabox
+
 import (
 	"fmt"
 	"strconv"
