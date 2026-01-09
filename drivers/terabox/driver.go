@@ -428,7 +428,7 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	return nil
 }
 
-// MEJORA CRÍTICA: Mejor control de goroutines y cancelación inmediata
+// MEJORA CRÍTICA: Mejor control de goroutines y cancelación inmediata + progreso preciso por bytes
 func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt, chunks []ChunkInfo, 
 	uploadBlockList []string, host string, params map[string]string, fileName string, 
 	uploadThreads int, up driver.UpdateProgress) error {
@@ -442,9 +442,12 @@ func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt
 	var uploadErr error
 	var errOnce sync.Once
 	
-	// Atomic para progreso thread-safe
-	var completedChunks atomic.Int32
-	totalChunks := int32(len(chunks))
+	// MEJORA: Usar atomic para bytes transferidos (más preciso que chunks)
+	var uploadedBytes atomic.Int64
+	var totalBytes int64
+	for _, chunk := range chunks {
+		totalBytes += chunk.Size
+	}
 	
 	// Channel to limit concurrent uploads
 	semaphore := make(chan struct{}, uploadThreads)
@@ -502,13 +505,18 @@ func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt
 							uploadBlockList[chunkIndex] = md5Hash
 							mu.Unlock()
 							
-							// Progreso sin lock usando atomic
-							completed := completedChunks.Add(1)
-							progress := float64(completed) * 100.0 / float64(totalChunks)
+							// MEJORA: Progreso basado en bytes reales, no chunks
+							uploaded := uploadedBytes.Add(chunk.Size)
+							progress := float64(uploaded) * 100.0 / float64(totalBytes)
 							
 							if up != nil {
 								up(progress)
 							}
+							
+							// Log con información útil
+							log.Debugf("Chunk %d/%d uploaded (%.2f%% - %s/%s)", 
+								chunkIndex+1, len(chunks), progress,
+								formatBytes(uploaded), formatBytes(totalBytes))
 						})
 				},
 				retry.Attempts(uint(d.getRetryCount())),
@@ -543,6 +551,20 @@ waitForCompletion:
 	}
 	
 	return uploadErr
+}
+
+// MEJORA: Helper para formatear bytes en formato legible
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 // MEJORA: Timeout dinámico basado en tamaño del chunk
