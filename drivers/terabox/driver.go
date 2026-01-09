@@ -518,32 +518,17 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 	}
 	
 	// Round to GiB for display consistency.
-    // Terabox shows 2173253451776 bytes as "2024 GB".
-    // We’ll make OpenList display a rounded number visually (GiB base),
-    // but keep the byte count accurate internally.
-    const gib = uint64(1024 * 1024 * 1024)
-
-    // Convert quota to GiB (rounded)
-    totalGiB := (uint64(quotaResp.Total) + gib/2) / gib
-    usedGiB := (uint64(quotaResp.Used) + gib/2) / gib
-
-    // Convert back to bytes
-    total := totalGiB * gib
-    used := usedGiB * gib
-
-    // Protect against underflow if used > total
-    var free uint64
-    if used > total {
-        free = 0
-    } else {
-        free = total - used
-    }
-
-    return &model.StorageDetails{
-        DiskUsage: model.DiskUsage{
-           TotalSpace: total,
-           FreeSpace:  free,
-        },
-    }, nil
+	const gib = int64(1024 * 1024 * 1024)
+	totalGiB := (int64(quotaResp.Total) + gib/2) / gib
+	usedGiB := (int64(quotaResp.Used) + gib/2) / gib
+	total := totalGiB * gib
+	used := usedGiB * gib
+	
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			UsedSpace:  used,
+		},
+	}, nil
 }
 var _ driver.Driver = (*Terabox)(nil)
