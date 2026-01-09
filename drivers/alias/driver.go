@@ -216,7 +216,7 @@ func (d *Alias) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 			} else {
 				objRet = &objRes
 			}
-			if details, ok := model.GetStorageDetails(obj); ok {
+			model.GetStorageDetails(obj); ok && details != nil && details.StorageDetails != nil {
 				objRet = &model.ObjStorageDetails{
 					Obj:                    objRet,
 					StorageDetailsWithName: *details,
