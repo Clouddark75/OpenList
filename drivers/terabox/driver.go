@@ -326,16 +326,6 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 		return err
 	}
 	
-	// MEJORA CRÍTICA: Asegurar limpieza del archivo temporal
-	// Si tempFile implementa io.Closer, cerrarlo al final
-	if closer, ok := tempFile.(io.Closer); ok {
-		defer func() {
-			if closeErr := closer.Close(); closeErr != nil {
-				log.Warnf("Failed to close temp file: %v", closeErr)
-			}
-		}()
-	}
-	
 	if utils.IsCanceled(ctx) {
 		return ctx.Err()
 	}
