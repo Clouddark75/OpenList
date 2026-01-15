@@ -1,6 +1,7 @@
 package terabox
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
@@ -8,42 +9,22 @@ import (
 )
 
 type File struct {
-	//TkbindId     int    `json:"tkbind_id"`
-	//OwnerType    int    `json:"owner_type"`
-	//Category     int    `json:"category"`
-	//RealCategory string `json:"real_category"`
 	FsId        int64 `json:"fs_id"`
 	ServerMtime int64 `json:"server_mtime"`
-	//OperId      int   `json:"oper_id"`
-	//ServerCtime int   `json:"server_ctime"`
 	Thumbs struct {
-		//Icon string `json:"icon"`
 		Url3 string `json:"url3"`
-		//Url2 string `json:"url2"`
-		//Url1 string `json:"url1"`
 	} `json:"thumbs"`
-	//Wpfile         int    `json:"wpfile"`
-	//LocalMtime     int    `json:"local_mtime"`
-	Size int64 `json:"size"`
-	//ExtentTinyint7 int    `json:"extent_tinyint7"`
-	Path string `json:"path"`
-	//Share          int    `json:"share"`
-	//ServerAtime    int    `json:"server_atime"`
-	//Pl             int    `json:"pl"`
-	//LocalCtime     int    `json:"local_ctime"`
+	Size           int64  `json:"size"`
+	Path           string `json:"path"`
 	ServerFilename string `json:"server_filename"`
-	//Md5            string `json:"md5"`
-	//OwnerId        int    `json:"owner_id"`
-	//Unlist int `json:"unlist"`
-	Isdir int `json:"isdir"`
+	Isdir          int    `json:"isdir"`
 }
 
 type ListResp struct {
 	Errno    int    `json:"errno"`
 	GuidInfo string `json:"guid_info"`
 	List     []File `json:"list"`
-	//RequestId int64  `json:"request_id"` 接口返回有时是int有时是string
-	Guid int `json:"guid"`
+	Guid     int    `json:"guid"`
 }
 
 func fileToObj(f File) *model.ObjThumb {
@@ -71,7 +52,6 @@ type DownloadResp2 struct {
 	Info  []struct {
 		Dlink string `json:"dlink"`
 	} `json:"info"`
-	//RequestID int64 `json:"request_id"`
 }
 
 type HomeInfoResp struct {
@@ -89,7 +69,6 @@ type PrecreateResp struct {
 	ReturnType int    `json:"return_type"`
 	BlockList  []int  `json:"block_list"`
 	Errno      int    `json:"errno"`
-	//RequestId  int64  `json:"request_id"`
 }
 
 type CheckLoginResp struct {
@@ -111,19 +90,10 @@ type ChunkInfo struct {
 	Size   int64 // Size of this chunk in bytes
 }
 
-// UploadProgress represents the progress of an upload operation
-type UploadProgress struct {
-	CompletedChunks int     // Number of chunks completed
-	TotalChunks     int     // Total number of chunks
-	CompletedBytes  int64   // Total bytes uploaded
-	TotalBytes      int64   // Total file size
-	Percentage      float64 // Upload percentage (0-100)
-}
-
 // ManageResp represents the response from file management operations
 type ManageResp struct {
-	Errno     int    `json:"errno"`
-	Info      []struct {
+	Errno  int `json:"errno"`
+	Info   []struct {
 		Errno int    `json:"errno"`
 		Path  string `json:"path"`
 	} `json:"info"`
@@ -154,8 +124,6 @@ type QuotaResp struct {
 	Expire     bool   `json:"expire"`
 	SboxUsed   int64  `json:"sbox_used"`
 	ServerTime int64  `json:"server_time"`
-	//RequestId  int64  `json:"request_id"` // Comentado ya que puede variar
-	//Newno      string `json:"newno"`
 }
 
 // UserInfoResp represents user information response
@@ -166,4 +134,45 @@ type UserInfoResp struct {
 		Avatar   string `json:"avatar"`
 		VipType  int    `json:"vip_type"`
 	} `json:"data"`
+}
+
+// formatBytes formatea bytes en formato legible (B, KiB, MiB, GiB, etc.)
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+
+// UploadStats (opcional) - para tracking avanzado de velocidad
+type UploadStats struct {
+	StartTime       time.Time
+	UploadedBytes   int64
+	TotalBytes      int64
+	LastUpdateTime  time.Time
+	LastUpdateBytes int64
+}
+
+func (s *UploadStats) GetSpeed() int64 {
+	elapsed := time.Since(s.StartTime).Seconds()
+	if elapsed > 0 {
+		return int64(float64(s.UploadedBytes) / elapsed)
+	}
+	return 0
+}
+
+func (s *UploadStats) GetETA() time.Duration {
+	speed := s.GetSpeed()
+	if speed > 0 {
+		remaining := s.TotalBytes - s.UploadedBytes
+		return time.Duration(float64(remaining)/float64(speed)) * time.Second
+	}
+	return 0
 }
