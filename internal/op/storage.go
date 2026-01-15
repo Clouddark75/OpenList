@@ -353,11 +353,8 @@ func GetStorageVirtualFilesWithDetailsByPath(ctx context.Context, prefix string,
 			return obj
 		}
 		ret := &model.ObjStorageDetails{
-			Obj: obj,
-			StorageDetailsWithName: model.StorageDetailsWithName{
-				StorageDetails: nil,
-				DriverName:     d.Config().Name,
-			},
+			Obj:            obj,
+			StorageDetails: nil,
 		}
 		timeoutCtx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
