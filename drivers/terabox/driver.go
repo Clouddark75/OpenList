@@ -10,6 +10,7 @@ import (
 	stdpath "path"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -41,35 +42,26 @@ func (d *Terabox) Init(ctx context.Context) error {
 	var resp CheckLoginResp
 	d.base_url = "https://www.terabox.com"
 	d.url_domain_prefix = "jp"
+	
+	// Verificar cancelación
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+	
+	// No usar retry - la API de login es sensible y podría causar bloqueos
 	_, err := d.get("/api/check/login", nil, &resp)
 	if err != nil {
 		return err
 	}
 	
-	// Check login status with retry
-	err = retry.Do(
-		func() error {
-			_, err := d.get("/api/check/login", nil, &resp)
-			if err != nil {
-				return err
-			}
-			if resp.Errno != 0 {
-				if resp.Errno == 9000 {
-					return retry.Unrecoverable(fmt.Errorf("terabox is not yet available in this area"))
-				}
-				return fmt.Errorf("failed to check login status according to cookie")
-			}
-			return nil
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to check login status (attempt %d): %v", n+1, err)
-		}),
-	)
+	if resp.Errno != 0 {
+		if resp.Errno == 9000 {
+			return fmt.Errorf("terabox is not yet available in this area")
+		}
+		return fmt.Errorf("failed to check login status according to cookie")
+	}
 	
-	return err
+	return nil
 }
 
 func (d *Terabox) Drop(ctx context.Context) error {
@@ -77,7 +69,8 @@ func (d *Terabox) Drop(ctx context.Context) error {
 }
 
 func (d *Terabox) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
-	files, err := d.getFiles(dir.GetPath())
+	// MEJORA: Pasar contexto a getFiles para cancelación
+	files, err := d.getFiles(ctx, dir.GetPath())
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +85,11 @@ func (d *Terabox) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	var link *model.Link
 	err := retry.Do(
 		func() error {
+			// MEJORA: Verificar cancelación
+			if utils.IsCanceled(ctx) {
+				return retry.Unrecoverable(ctx.Err())
+			}
+			
 			var err error
 			if d.DownloadAPI == "crack" {
 				link, err = d.linkCrack(file, args)
@@ -111,6 +109,11 @@ func (d *Terabox) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 }
 
 func (d *Terabox) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
+	// Verificar cancelación
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+	
 	params := map[string]string{
 		"a": "commit",
 	}
@@ -119,12 +122,23 @@ func (d *Terabox) MakeDir(ctx context.Context, parentDir model.Obj, dirName stri
 		"isdir":      "1",
 		"block_list": "[]",
 	}
+	// No necesita retry - post_form ya tiene retry interno en request()
 	res, err := d.post_form("/api/create", params, data, nil)
 	log.Debugln(string(res))
 	return err
 }
 
 func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
+	// Verificar cancelación
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+	
+	// Ensure jsToken is available for move operation
+	if err := d.ensureJsToken(); err != nil {
+		return fmt.Errorf("failed to get jsToken for move: %v", err)
+	}
+	
 	data := []base.Json{
 		{
 			"path":    srcObj.GetPath(),
@@ -132,6 +146,7 @@ func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 			"newname": srcObj.GetName(),
 		},
 	}
+	// No necesita retry - manage() ya tiene retry interno en request()
 	_, err := d.manage("move", data)
 	return err
 }
@@ -139,6 +154,11 @@ func (d *Terabox) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) error {
 	return retry.Do(
 		func() error {
+			// MEJORA: Verificar cancelación
+			if utils.IsCanceled(ctx) {
+				return retry.Unrecoverable(ctx.Err())
+			}
+			
 			// Ensure jsToken is available for rename operation
 			if err := d.ensureJsToken(); err != nil {
 				return fmt.Errorf("failed to get jsToken for rename: %v", err)
@@ -165,6 +185,11 @@ func (d *Terabox) Rename(ctx context.Context, srcObj model.Obj, newName string) 
 func (d *Terabox) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 	return retry.Do(
 		func() error {
+			// MEJORA: Verificar cancelación
+			if utils.IsCanceled(ctx) {
+				return retry.Unrecoverable(ctx.Err())
+			}
+			
 			// Ensure jsToken is available for copy operation
 			if err := d.ensureJsToken(); err != nil {
 				return fmt.Errorf("failed to get jsToken for copy: %v", err)
@@ -192,6 +217,11 @@ func (d *Terabox) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 	return retry.Do(
 		func() error {
+			// MEJORA: Verificar cancelación
+			if utils.IsCanceled(ctx) {
+				return retry.Unrecoverable(ctx.Err())
+			}
+			
 			// Ensure jsToken is available for delete operation
 			if err := d.ensureJsToken(); err != nil {
 				return fmt.Errorf("failed to get jsToken for remove: %v", err)
@@ -210,32 +240,37 @@ func (d *Terabox) Remove(ctx context.Context, obj model.Obj) error {
 	)
 }
 
+// MEJORA: Simplificado - sin retry wrapper redundante
 func (d *Terabox) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	return retry.Do(
-		func() error {
-			return d.putWithRetry(ctx, dstDir, stream, up)
-		},
-		retry.Attempts(uint(d.getRetryCount())),
-		retry.Delay(2*time.Second),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.Warnf("Failed to upload file (attempt %d): %v", n+1, err)
-		}),
-	)
+	return d.putWithRetry(ctx, dstDir, stream, up)
 }
 
 func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+	// Verificar cancelación temprana
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+
 	// Ensure jsToken is available before upload
 	if err := d.ensureJsToken(); err != nil {
 		return fmt.Errorf("failed to get jsToken for upload: %v", err)
 	}
 	
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+
 	resp, err := base.RestyClient.R().
 		SetContext(ctx).
 		Get("https://" + d.url_domain_prefix + "-data.terabox.com/rest/2.0/pcs/file?method=locateupload")
 	if err != nil {
 		return err
 	}
+	
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+
 	var locateupload_resp LocateUploadResp
 	err = utils.Json.Unmarshal(resp.Body(), &locateupload_resp)
 	if err != nil {
@@ -271,6 +306,11 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	if err != nil {
 		return err
 	}
+	
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
+
 	log.Debugf("%+v", precreateResp)
 	if precreateResp.Errno != 0 {
 		log.Debugln(string(res))
@@ -285,6 +325,10 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	if err != nil {
 		return err
 	}
+	
+	if utils.IsCanceled(ctx) {
+		return ctx.Err()
+	}
 
 	params := map[string]string{
 		"method":     "upload",
@@ -298,14 +342,13 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	}
 
 	chunkSize := calculateChunkSize(streamSize)
-	count := int((streamSize + chunkSize - 1) / chunkSize) // cálculo entero más eficiente
+	count := int((streamSize + chunkSize - 1) / chunkSize)
 	
-	// Get upload threads setting with default value of 2
+	// Get upload threads setting with default value
 	uploadThreads := d.UploadThreads
 	if uploadThreads <= 0 {
 		uploadThreads = 4
 	}
-	// Limit max threads to prevent overwhelming the server
 	if uploadThreads > 10 {
 		uploadThreads = 10
 	}
@@ -363,58 +406,107 @@ func (d *Terabox) putWithRetry(ctx context.Context, dstDir model.Obj, stream mod
 	if createResp.Errno != 0 {
 		return fmt.Errorf("[terabox] failed to create file, errno: %d", createResp.Errno)
 	}
-	time.Sleep(time.Duration(len(precreateResp.BlockList)/16+5) * time.Second)
+	
+	// Sleep con verificación de cancelación
+	sleepDuration := time.Duration(len(precreateResp.BlockList)/16+5) * time.Second
+	select {
+	case <-time.After(sleepDuration):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	
 	return nil
 }
 
+// MEJORA CRÍTICA: Mejor control de goroutines y cancelación inmediata + progreso preciso por bytes
 func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt, chunks []ChunkInfo, 
 	uploadBlockList []string, host string, params map[string]string, fileName string, 
 	uploadThreads int, up driver.UpdateProgress) error {
 	
+	// Context cancelable para propagación inmediata
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var uploadErr error
+	var errOnce sync.Once
+	
+	// MEJORA: Usar atomic para bytes transferidos (más preciso que chunks)
+	var uploadedBytes atomic.Int64
+	var totalBytes int64
+	for _, chunk := range chunks {
+		totalBytes += chunk.Size
+	}
 	
 	// Channel to limit concurrent uploads
 	semaphore := make(chan struct{}, uploadThreads)
 	
-	// Progress tracking
-	completedChunks := 0
-	totalChunks := len(chunks)
+	// MEJORA: Canal para detener la creación de nuevas goroutines
+	stopLaunching := make(chan struct{})
 	
+	// Función para reportar error y cancelar
+	reportError := func(err error) {
+		errOnce.Do(func() {
+			uploadErr = err
+			cancel()
+			close(stopLaunching) // Detener lanzamiento de nuevas goroutines
+		})
+	}
+	
+	// MEJORA CRÍTICA: Loop corregido para salir correctamente
 	for i := range chunks {
-		if utils.IsCanceled(ctx) {
-			return ctx.Err()
+		// Verificar si debemos detenernos
+		select {
+		case <-ctx.Done():
+			goto waitForCompletion // Salir del loop correctamente
+		case <-stopLaunching:
+			goto waitForCompletion
+		default:
 		}
 		
 		wg.Add(1)
 		go func(chunkIndex int) {
 			defer wg.Done()
 			
-			// Acquire semaphore
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
+			// Verificar cancelación antes de adquirir semáforo
+			select {
+			case <-ctx.Done():
+				return
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			}
 			
 			chunk := chunks[chunkIndex]
 			
 			// Use retry-go for chunk upload
 			chunkErr := retry.Do(
 				func() error {
-					if utils.IsCanceled(ctx) {
+					// Verificar cancelación en cada intento
+					select {
+					case <-ctx.Done():
 						return retry.Unrecoverable(ctx.Err())
+					default:
 					}
 					
 					return d.uploadSingleChunk(ctx, tempFile, chunk, host, params, fileName, 
 						func(md5Hash string) {
 							mu.Lock()
 							uploadBlockList[chunkIndex] = md5Hash
-							completedChunks++
-							progress := float64(completedChunks) * 100.0 / float64(totalChunks)
 							mu.Unlock()
+							
+							// MEJORA: Progreso basado en bytes reales, no chunks
+							uploaded := uploadedBytes.Add(chunk.Size)
+							progress := float64(uploaded) * 100.0 / float64(totalBytes)
 							
 							if up != nil {
 								up(progress)
 							}
+							
+							// Log con información útil
+							log.Debugf("Chunk %d/%d uploaded (%.2f%% - %s/%s)", 
+								chunkIndex+1, len(chunks), progress,
+								formatBytes(uploaded), formatBytes(totalBytes))
 						})
 				},
 				retry.Attempts(uint(d.getRetryCount())),
@@ -423,30 +515,57 @@ func (d *Terabox) uploadChunksThreaded(ctx context.Context, tempFile io.ReaderAt
 				retry.OnRetry(func(n uint, err error) {
 					log.Warnf("Chunk %d upload failed (attempt %d): %v", chunkIndex, n+1, err)
 				}),
+				// Detener retry si el contexto fue cancelado
+				retry.RetryIf(func(err error) bool {
+					select {
+					case <-ctx.Done():
+						return false
+					default:
+						return true
+					}
+				}),
 			)
 			
 			if chunkErr != nil {
-				mu.Lock()
-				if uploadErr == nil {
-					uploadErr = fmt.Errorf("chunk %d upload failed after retries: %v", chunkIndex, chunkErr)
-				}
-				mu.Unlock()
+				reportError(fmt.Errorf("chunk %d upload failed after retries: %v", chunkIndex, chunkErr))
 			}
 		}(i)
 	}
 	
+waitForCompletion:
 	wg.Wait()
+	
+	// Verificar si fue cancelación o error
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	
 	return uploadErr
 }
 
+// MEJORA: Timeout dinámico basado en tamaño del chunk
 func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, chunk ChunkInfo, 
 	host string, params map[string]string, fileName string, onSuccess func(string)) error {
+	
+	// Verificar cancelación temprana
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	
 	// Read chunk data
 	chunkData := make([]byte, chunk.Size)
 	_, err := tempFile.ReadAt(chunkData, chunk.Offset)
 	if err != nil {
 		return fmt.Errorf("failed to read chunk data: %v", err)
+	}
+	
+	// Verificar cancelación después de leer
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	
 	// Calculate MD5 hash
@@ -462,8 +581,13 @@ func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, c
 	}
 	uploadParams["partseq"] = strconv.Itoa(chunk.Index)
 	
-	// Create a context with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// MEJORA: Timeout dinámico basado en tamaño (mínimo 30s, +5s por MB)
+	timeoutDuration := 30*time.Second + time.Duration(chunk.Size/(1024*1024))*5*time.Second
+	if timeoutDuration > 5*time.Minute {
+		timeoutDuration = 5 * time.Minute // Máximo 5 minutos
+	}
+	
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeoutDuration)
 	defer cancel()
 	
 	res, err := base.RestyClient.R().
@@ -474,7 +598,13 @@ func (d *Terabox) uploadSingleChunk(ctx context.Context, tempFile io.ReaderAt, c
 		Post(u)
 	
 	if err != nil {
-		return fmt.Errorf("HTTP request failed: %v", err)
+		// Diferenciar entre cancelación y error de red
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return fmt.Errorf("HTTP request failed: %v", err)
+		}
 	}
 	
 	if res.StatusCode() != 200 {
@@ -507,6 +637,11 @@ func (d *Terabox) getRetryCount() int {
 }
 
 func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	// MEJORA: Verificar cancelación
+	if utils.IsCanceled(ctx) {
+		return nil, ctx.Err()
+	}
+	
 	var quotaResp QuotaResp
 	_, err := d.get("/api/quota", nil, &quotaResp)
 	if err != nil {
@@ -518,32 +653,18 @@ func (d *Terabox) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 	}
 	
 	// Round to GiB for display consistency.
-    // Terabox shows 2173253451776 bytes as "2024 GB".
-    // We’ll make OpenList display a rounded number visually (GiB base),
-    // but keep the byte count accurate internally.
-    const gib = uint64(1024 * 1024 * 1024)
-
-    // Convert quota to GiB (rounded)
-    totalGiB := (uint64(quotaResp.Total) + gib/2) / gib
-    usedGiB := (uint64(quotaResp.Used) + gib/2) / gib
-
-    // Convert back to bytes
-    total := totalGiB * gib
-    used := usedGiB * gib
-
-    // Protect against underflow if used > total
-    var free uint64
-    if used > total {
-        free = 0
-    } else {
-        free = total - used
-    }
-
-    return &model.StorageDetails{
-        DiskUsage: model.DiskUsage{
-           TotalSpace: total,
-           FreeSpace:  free,
-        },
-    }, nil
+	const gib = int64(1024 * 1024 * 1024)
+	totalGiB := (int64(quotaResp.Total) + gib/2) / gib
+	usedGiB := (int64(quotaResp.Used) + gib/2) / gib
+	total := totalGiB * gib
+	used := usedGiB * gib
+	
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			UsedSpace:  used,
+		},
+	}, nil
 }
+
 var _ driver.Driver = (*Terabox)(nil)
