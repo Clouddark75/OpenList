@@ -2,6 +2,7 @@ package terabox
 
 import (
 	"encoding/base64"
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -207,7 +208,7 @@ func (d *Terabox) post_form(pathname string, params map[string]string, data map[
 	}, resp)
 }
 
-func (d *Terabox) getFiles(dir string) ([]File, error) {
+func (d *Terabox) getFiles(ctx context.Context, dir string) ([]File, error) {
 	page := 1
 	num := 100
 	params := map[string]string{
@@ -222,12 +223,21 @@ func (d *Terabox) getFiles(dir string) ([]File, error) {
 	res := make([]File, 0)
 	
 	for {
+		// Verificar cancelación en cada página
+		if utils.IsCanceled(ctx) {
+			return nil, ctx.Err()
+		}
+		
 		params["page"] = strconv.Itoa(page)
 		params["num"] = strconv.Itoa(num)
 		
 		var resp ListResp
 		err := retry.Do(
 			func() error {
+				if utils.IsCanceled(ctx) {
+					return retry.Unrecoverable(ctx.Err())
+				}
+				
 				_, err := d.get("/api/list", params, &resp)
 				if err != nil {
 					return err
