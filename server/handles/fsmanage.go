@@ -61,7 +61,7 @@ type MoveCopyReq struct {
 	DstDir       string   `json:"dst_dir"`
 	Names        []string `json:"names"`
 	Overwrite    bool     `json:"overwrite"`
-	SkipExisting bool     `json:"skipExisting"` // Corregido: era skip_Existing
+	SkipExisting bool     `json:"skip_existing"`
 	Merge        bool     `json:"merge"`
 }
 
@@ -105,6 +105,8 @@ func FsMove(c *gin.Context) {
 		validNames = req.Names
 	}
 
+	// Create all tasks immediately without any synchronous validation
+	// All validation will be done asynchronously in the background
 	var addedTasks []task.TaskExtensionInfo
 	for i, name := range validNames {
 		t, err := fs.Move(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
@@ -117,6 +119,7 @@ func FsMove(c *gin.Context) {
 		}
 	}
 
+	// Return immediately with task information
 	if len(addedTasks) > 0 {
 		common.SuccessResp(c, gin.H{
 			"message": fmt.Sprintf("Successfully created %d move task(s)", len(addedTasks)),
@@ -158,32 +161,14 @@ func FsCopy(c *gin.Context) {
 	var validNames []string
 	if !req.Overwrite {
 		for _, name := range req.Names {
-			dstPath := stdpath.Join(dstDir, name)
-			srcPath := stdpath.Join(srcDir, name)
-			
-			dstObj, _ := fs.Get(c.Request.Context(), dstPath, &fs.GetArgs{NoLog: true})
-			
-			if dstObj != nil {
-				// El destino existe
-				if req.SkipExisting {
-					// Si skipExisting está activado
-					srcObj, _ := fs.Get(c.Request.Context(), srcPath, &fs.GetArgs{NoLog: true})
-					
-					// Si ambos son directorios, usar merge
-					if srcObj != nil && srcObj.IsDir() && dstObj.IsDir() {
-						validNames = append(validNames, name)
-					}
-					// Si es un archivo, lo saltamos (no lo agregamos)
-				} else if !req.Merge {
-					// Si no está skipExisting ni merge, error
+			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, name), &fs.GetArgs{NoLog: true}); res != nil {
+				if !req.SkipExisting && !req.Merge {
 					common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
 					return
-				} else if req.Merge && dstObj.IsDir() {
-					// Merge manual activado y es directorio
+				} else if req.Merge && res.IsDir() {
 					validNames = append(validNames, name)
 				}
 			} else {
-				// El destino no existe, agregar
 				validNames = append(validNames, name)
 			}
 		}
@@ -191,29 +176,16 @@ func FsCopy(c *gin.Context) {
 		validNames = req.Names
 	}
 
+	// Create all tasks immediately without any synchronous validation
+	// All validation will be done asynchronously in the background
 	var addedTasks []task.TaskExtensionInfo
 	for i, name := range validNames {
 		var t task.TaskExtensionInfo
-		srcPath := stdpath.Join(srcDir, name)
-		dstPath := stdpath.Join(dstDir, name)
-		
-		// Determinar si usar merge
-		useMerge := req.Merge
-		if !useMerge && req.SkipExisting {
-			// Auto-detectar si necesitamos merge
-			srcObj, _ := fs.Get(c.Request.Context(), srcPath, &fs.GetArgs{NoLog: true})
-			dstObj, _ := fs.Get(c.Request.Context(), dstPath, &fs.GetArgs{NoLog: true})
-			if srcObj != nil && dstObj != nil && srcObj.IsDir() && dstObj.IsDir() {
-				useMerge = true
-			}
-		}
-		
-		if useMerge {
-			t, err = fs.Merge(c.Request.Context(), srcPath, dstDir, len(validNames) > i+1)
+		if req.Merge {
+			t, err = fs.Merge(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
 		} else {
-			t, err = fs.Copy(c.Request.Context(), srcPath, dstDir, len(validNames) > i+1)
+			t, err = fs.Copy(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
 		}
-		
 		if t != nil {
 			addedTasks = append(addedTasks, t)
 		}
@@ -223,6 +195,7 @@ func FsCopy(c *gin.Context) {
 		}
 	}
 
+	// Return immediately with task information
 	if len(addedTasks) > 0 {
 		common.SuccessResp(c, gin.H{
 			"message": fmt.Sprintf("Successfully created %d copy task(s)", len(addedTasks)),
@@ -315,6 +288,7 @@ func FsRemove(c *gin.Context) {
 			return
 		}
 	}
+	//fs.ClearCache(req.Dir)
 	common.SuccessResp(c)
 }
 
@@ -355,9 +329,13 @@ func FsRemoveEmptyDirectory(c *gin.Context) {
 		return
 	}
 
+	// record the file path
 	filePathMap := make(map[model.Obj]string)
+	// record the parent file
 	fileParentMap := make(map[model.Obj]model.Obj)
+	// removing files
 	removingFiles := generic.NewQueue[model.Obj]()
+	// removed files
 	removedFiles := make(map[string]bool)
 	for _, file := range rootFiles {
 		if !file.IsDir() {
@@ -368,6 +346,7 @@ func FsRemoveEmptyDirectory(c *gin.Context) {
 	}
 
 	for !removingFiles.IsEmpty() {
+
 		removingFile := removingFiles.Pop()
 		removingFilePath := fmt.Sprintf("%s/%s", filePathMap[removingFile], removingFile.GetName())
 
@@ -382,17 +361,21 @@ func FsRemoveEmptyDirectory(c *gin.Context) {
 		}
 
 		if len(subFiles) == 0 {
+			// remove empty directory
 			err = fs.Remove(c.Request.Context(), removingFilePath)
 			removedFiles[removingFilePath] = true
 			if err != nil {
 				common.ErrorResp(c, err, 500)
 				return
 			}
+			// recheck parent folder
 			parentFile, exist := fileParentMap[removingFile]
 			if exist {
 				removingFiles.Push(parentFile)
 			}
+
 		} else {
+			// recursive remove
 			for _, subFile := range subFiles {
 				if !subFile.IsDir() {
 					continue
@@ -402,17 +385,22 @@ func FsRemoveEmptyDirectory(c *gin.Context) {
 				fileParentMap[subFile] = removingFile
 			}
 		}
+
 	}
 
 	common.SuccessResp(c)
 }
 
+// Link return real link, just for proxy program, it may contain cookie, so just allowed for admin
 func Link(c *gin.Context) {
 	var req MkdirOrLinkReq
 	if err := c.ShouldBind(&req); err != nil {
 		common.ErrorResp(c, err, 400)
 		return
 	}
+	//user := c.Request.Context().Value(conf.UserKey).(*model.User)
+	//rawPath := stdpath.Join(user.BasePath, req.Path)
+	// why need not join base_path? because it's always the full path
 	rawPath := req.Path
 	storage, err := fs.GetStorage(rawPath, &fs.GetStoragesArgs{})
 	if err != nil {
