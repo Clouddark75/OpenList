@@ -7,7 +7,7 @@ toolchain go1.24.5
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.18.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.2
-    github.com/Clouddark75/115driver v1.1.4
+    github.com/SheltonZhu/115driver v1.1.1
     github.com/KarpelesLab/reflink v1.0.2
 	github.com/KirCute/zip v1.0.1
 	github.com/OpenListTeam/go-cache v0.1.0
