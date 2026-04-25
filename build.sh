@@ -238,6 +238,7 @@ BuildRelease() {
   # cp ./"$appName"-windows-amd64.exe ./"$appName"-windows-amd64-upx.exe
   # upx -9 ./"$appName"-windows-amd64-upx.exe
   mv "$appName"-* build
+ }
 
 BuildReleaseLinuxMusl() {
   rm -rf .git/
