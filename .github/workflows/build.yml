@@ -38,7 +38,7 @@ jobs:
       - name: Setup web
         run: bash build.sh dev web
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
 
       - name: Build
@@ -48,7 +48,7 @@ jobs:
           flags: ${{ contains(matrix.target, '-musl') && '-ldflags=-linkmode external -extldflags ''-static -fpic''' || '-ldflags=' }}
           static-link-for-musl: true
           musl-target-format: $os-$musl-$arch
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           out-dir: build
           x-flags: |
             github.com/OpenListTeam/OpenList/v4/internal/conf.BuiltAt=$built_at
