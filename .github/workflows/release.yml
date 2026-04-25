@@ -16,7 +16,7 @@ jobs:
       - name: Prerelease
         uses: irongut/EditRelease@v1.2.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
           id: ${{ github.event.release.id }}
           prerelease: true
 
@@ -65,7 +65,7 @@ jobs:
         run: |
           bash build.sh release ${{ matrix.build-type == 'lite' && 'lite' || '' }} ${{ matrix.target-platform }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
 
       - name: Upload assets
