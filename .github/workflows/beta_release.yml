@@ -61,16 +61,16 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: "!(*musl*|*windows-arm64*|*windows7-*|*android*|*freebsd*)" # xgo and loongarch (exclude mips64le)
+          - target: "!(*musl*|*windows-arm64*|*android*|*freebsd*)" # xgo and loongarch (exclude mips64le)
             hash: "md5"
             flags: ""
             goflags: ""
-          - target: "linux-(mips|mips64|mipsle|mips64le|loong64)-musl*" # musl-compat-family
+          - target: "linux-(mips|mips64|mipsle|mips64le)-musl*" # musl-compat-family
             hash: "md5-linux-musl-mips"
             flags: "-ldflags=-linkmode external -extldflags '-static -fpic'"
             goflags: ""
             musl_static: "true"
-          - target: "linux-!(arm*|mips|mips64|mipsle|mips64le|loong64)-musl*" # musl-not-arm (exclude compat-family)
+          - target: "linux-!(arm*|mips|mips64|mipsle|mips64le)-musl*" # musl-not-arm (exclude compat-family)
             hash: "md5-linux-musl"
             flags: "-ldflags=-linkmode external -extldflags '-static -fpic'"
             goflags: ""
@@ -84,11 +84,6 @@ jobs:
             hash: "md5-windows-arm64"
             flags: ""
             goflags: ""
-            musl_static: "false"
-          - target: "windows7-*" #win7
-            hash: "md5-windows7"
-            flags: ""
-            goflags: "-tags=sqlite_cgo_compat"
             musl_static: "false"
           - target: "android-*" #android
             hash: "md5-android"
@@ -117,7 +112,7 @@ jobs:
       - name: Setup web
         run: bash build.sh dev web
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
 
       - name: Build
@@ -127,7 +122,7 @@ jobs:
           flags: ${{ matrix.flags || '-ldflags=' }}
           static-link-for-musl: true
           musl-target-format: $os-$musl-$arch
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           out-dir: build
           output: openlist-$target$ext
           musl-base-url: "https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
@@ -162,7 +157,7 @@ jobs:
         run: |
           bash build.sh zip ${{ matrix.hash }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       # See above
       - name: Upload assets to beta release
