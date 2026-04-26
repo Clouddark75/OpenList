@@ -69,7 +69,7 @@ jobs:
           FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
 
       - name: Upload assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: build/compress/*
           prerelease: false
