@@ -130,6 +130,8 @@ func FsMove(c *gin.Context) {
 					common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
 					return
 				} else {
+					// Archivo existe y skipExisting está activo -> marcar como vacío para saltar
+					req.Names[i] = ""
 					continue
 				}
 			}
