@@ -215,6 +215,7 @@ func FsCopy(c *gin.Context) {
 	if !strings.HasSuffix(srcDir, "/") {
 		srcDir += "/"
 	}
+	useMergeForIndex := make(map[int]bool)
 	for i, name := range req.Names {
 		// ensure req.Names is not a relative path
 		srcPath := stdpath.Join(srcDir, name)
@@ -228,13 +229,34 @@ func FsCopy(c *gin.Context) {
 				common.ErrorStrResp(c, fmt.Sprintf("invalid file name [%s]", name), 400)
 				return
 			}
-			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, base), &fs.GetArgs{NoLog: true}); res != nil {
+			dstPath := stdpath.Join(dstDir, base)
+			if dstRes, _ := fs.Get(c.Request.Context(), dstPath, &fs.GetArgs{NoLog: true}); dstRes != nil {
+				// El destino existe
 				if !req.SkipExisting && !req.Merge {
+					// No hay skip ni merge -> error
 					common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
 					return
-				} else if !req.Merge || !res.IsDir() {
+				}
+
+				// Verificar si origen es directorio
+				srcRes, _ := fs.Get(c.Request.Context(), srcPath, &fs.GetArgs{NoLog: true})
+
+				if req.SkipExisting && srcRes != nil && srcRes.IsDir() && dstRes.IsDir() {
+					// Skip está activo, ambos son directorios -> usar merge automáticamente
+					useMergeForIndex[i] = true
+					req.Names[i] = srcPath
 					continue
 				}
+
+				if req.Merge && dstRes.IsDir() {
+					// Merge manual está activo y destino es directorio
+					useMergeForIndex[i] = true
+					req.Names[i] = srcPath
+					continue
+				}
+
+				// En otros casos (archivo existe, no es directorio, etc.) -> skip
+				continue
 			}
 		}
 		req.Names[i] = srcPath
@@ -248,7 +270,8 @@ func FsCopy(c *gin.Context) {
 			continue
 		}
 		var t task.TaskExtensionInfo
-		if req.Merge {
+		// Usar merge si fue marcado para este índice (auto-detección o manual)
+		if req.Merge || useMergeForIndex[i] {
 			t, err = fs.Merge(c.Request.Context(), p, dstDir, len(req.Names) > i+1)
 		} else {
 			t, err = fs.Copy(c.Request.Context(), p, dstDir, len(req.Names) > i+1)
@@ -526,5 +549,5 @@ func Link(c *gin.Context) {
 		return
 	}
 	defer link.Close()
-	common.SuccessResp(c, link)
+	common.SuccessResp(c)
 }
