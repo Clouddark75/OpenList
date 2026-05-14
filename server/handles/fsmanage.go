@@ -258,6 +258,7 @@ func FsCopy(c *gin.Context) {
 				}
 
 				// En otros casos (archivo existe, no es directorio, etc.) -> skip
+				req.Names[i] = ""
 				continue
 			}
 		}
