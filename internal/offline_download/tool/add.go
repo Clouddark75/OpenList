@@ -69,16 +69,22 @@ func AddURL(ctx context.Context, args *AddURLArgs) (task.TaskExtensionInfo, erro
 	}
 	// try putting url
 	if args.Tool == "SimpleHttp" {
-		// Validate scheme before attempting PutURL.
-		// Only HTTP/HTTPS are supported; magnet, ed2k, etc. are not.
+		// Only HTTP/HTTPS are supported; reject magnet, ed2k, torrents, etc.
 		u, parseErr := url.Parse(args.URL)
 		if parseErr != nil || (u.Scheme != "http" && u.Scheme != "https") {
 			return nil, fmt.Errorf("SimpleHttp tool does not support this URL scheme, please use aria2 or other tools for magnet/ed2k links")
 		}
-		// Attempt direct PutURL — if the storage does not implement PutURL,
-		// err will be errs.NotImplement (meaning "not supported by this driver"),
-		// which is a legitimate result and is returned as-is to the caller.
-		return nil, tryPutUrl(ctx, args.DstDirPath, args.URL)
+		err = tryPutUrl(ctx, args.DstDirPath, args.URL)
+		if err == nil {
+			// Storage handled PutURL directly — done.
+			return nil, nil
+		}
+		if !errors.Is(err, errs.NotImplement) {
+			// Real error from the storage — propagate it.
+			return nil, err
+		}
+		// errs.NotImplement means the storage doesn't support direct PutURL;
+		// fall through to create a normal download task below.
 	}
 
 	// ed2k 链接自动路由：如果当前工具不支持 ed2k，自动尝试使用迅雷系工具
