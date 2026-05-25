@@ -98,7 +98,7 @@ func SetTransmission(c *gin.Context) {
 	}
 	items := []model.SettingItem{
 		{Key: conf.TransmissionUri, Value: req.Uri, Type: conf.TypeString, Group: model.OFFLINE_DOWNLOAD, Flag: model.PRIVATE},
-		{Key: conf.TransmissionSeedtime, Value: req.Seedtime, Type: conf.TypeNumber, Group: model.OFFLINE_DOWNLOAD, Flag: model.PRIVATE},
+		{Key: conf.TransmissionSeedtime, Value: req.Seedtime, Type: conf.TypeString, Group: model.OFFLINE_DOWNLOAD, Flag: model.PRIVATE},
 	}
 	if err := op.SaveSettingItems(items); err != nil {
 		common.ErrorResp(c, err, 500)
@@ -484,6 +484,59 @@ type AddOfflineDownloadReq struct {
 	DeletePolicy string   `json:"delete_policy"`
 }
 
+// splitURLs expands a slice of URL strings by splitting any concatenated
+// HTTP/HTTPS URLs within a single entry into individual URLs.
+// For example, "https://a.comhttps://b.com" becomes ["https://a.com", "https://b.com"].
+// Non-HTTP schemes (magnet:, ed2k://, etc.) are returned as-is.
+func splitURLs(urls []string) []string {
+	var result []string
+	for _, raw := range urls {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		// Only attempt to split entries that contain HTTP/HTTPS URLs.
+		// Non-HTTP schemes (magnet, ed2k, ftp, etc.) won't contain
+		// "http://" or "https://" mid-string, so they pass through unchanged.
+		if !strings.Contains(raw, "http://") && !strings.Contains(raw, "https://") {
+			result = append(result, raw)
+			continue
+		}
+		// Split on "https://" first, then "http://", re-attaching the scheme.
+		// Strategy: replace "https://" with a sentinel, split on "http://",
+		// then restore "https://" — this handles interleaved http/https correctly.
+		const sentinel = "\x00HTTPS\x00"
+		normalized := strings.ReplaceAll(raw, "https://", sentinel)
+		parts := strings.Split(normalized, "http://")
+		for i, part := range parts {
+			// Restore https:// sentinel back
+			part = strings.ReplaceAll(part, sentinel, "https://")
+			if i == 0 && part == "" {
+				// The string started with "http://", skip the empty leading part
+				continue
+			}
+			// Re-attach "http://" to all parts except the first non-empty one
+			// (which either started with https:// already, or is a bare fragment
+			// before the first http:// — both handled below).
+			var url string
+			if strings.HasPrefix(part, "https://") {
+				url = part
+			} else if i == 0 {
+				// This part came before any "http://", meaning the original string
+				// started with "https://" (already restored) — use as-is.
+				url = part
+			} else {
+				url = "http://" + part
+			}
+			url = strings.TrimSpace(url)
+			if url != "" {
+				result = append(result, url)
+			}
+		}
+	}
+	return result
+}
+
 func AddOfflineDownload(c *gin.Context) {
 	user := c.Request.Context().Value(conf.UserKey).(*model.User)
 	if !user.CanAddOfflineDownloadTasks() {
@@ -510,16 +563,14 @@ func AddOfflineDownload(c *gin.Context) {
 		common.ErrorResp(c, errs.PermissionDenied, 403)
 		return
 	}
-	var tasks []task.TaskExtensionInfo
-	for _, url := range req.Urls {
-		// Filter out empty lines and whitespace-only strings
-		trimmedUrl := strings.TrimSpace(url)
-		if trimmedUrl == "" {
-			continue
-		}
 
+	// Expand any concatenated URLs within each entry
+	expandedUrls := splitURLs(req.Urls)
+
+	var tasks []task.TaskExtensionInfo
+	for _, url := range expandedUrls {
 		t, err := tool.AddURL(c, &tool.AddURLArgs{
-			URL:          trimmedUrl,
+			URL:          url,
 			DstDirPath:   reqPath,
 			Tool:         req.Tool,
 			DeletePolicy: tool.DeletePolicy(req.DeletePolicy),
