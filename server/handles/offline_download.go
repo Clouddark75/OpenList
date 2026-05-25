@@ -502,35 +502,16 @@ func splitURLs(urls []string) []string {
 			result = append(result, raw)
 			continue
 		}
-		// Split on "https://" first, then "http://", re-attaching the scheme.
-		// Strategy: replace "https://" with a sentinel, split on "http://",
-		// then restore "https://" — this handles interleaved http/https correctly.
-		const sentinel = "\x00HTTPS\x00"
-		normalized := strings.ReplaceAll(raw, "https://", sentinel)
-		parts := strings.Split(normalized, "http://")
-		for i, part := range parts {
-			// Restore https:// sentinel back
-			part = strings.ReplaceAll(part, sentinel, "https://")
-			if i == 0 && part == "" {
-				// The string started with "http://", skip the empty leading part
-				continue
-			}
-			// Re-attach "http://" to all parts except the first non-empty one
-			// (which either started with https:// already, or is a bare fragment
-			// before the first http:// — both handled below).
-			var url string
-			if strings.HasPrefix(part, "https://") {
-				url = part
-			} else if i == 0 {
-				// This part came before any "http://", meaning the original string
-				// started with "https://" (already restored) — use as-is.
-				url = part
-			} else {
-				url = "http://" + part
-			}
-			url = strings.TrimSpace(url)
-			if url != "" {
-				result = append(result, url)
+		// Insert a null-byte sentinel before every http:// and https://,
+		// then split on that sentinel. This correctly handles all combinations:
+		// https://+https://, http://+http://, and mixed http://+https://.
+		raw = strings.ReplaceAll(raw, "https://", "\x00https://")
+		raw = strings.ReplaceAll(raw, "http://", "\x00http://")
+		parts := strings.Split(raw, "\x00")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				result = append(result, part)
 			}
 		}
 	}
