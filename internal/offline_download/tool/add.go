@@ -69,13 +69,16 @@ func AddURL(ctx context.Context, args *AddURLArgs) (task.TaskExtensionInfo, erro
 	}
 	// try putting url
 	if args.Tool == "SimpleHttp" {
-		err = tryPutUrl(ctx, args.DstDirPath, args.URL)
-		if err == nil || !errors.Is(err, errs.NotImplement) {
-			return nil, err
+		// Validate scheme before attempting PutURL.
+		// Only HTTP/HTTPS are supported; magnet, ed2k, etc. are not.
+		u, parseErr := url.Parse(args.URL)
+		if parseErr != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return nil, fmt.Errorf("SimpleHttp tool does not support this URL scheme, please use aria2 or other tools for magnet/ed2k links")
 		}
-		// SimpleHttp 不支持非 HTTP/HTTPS 协议（如 magnet、ed2k 等）
-		// tryPutUrl 返回 NotImplement 说明 URL 不是 HTTP/HTTPS
-		return nil, fmt.Errorf("SimpleHttp tool does not support this URL scheme, please use aria2 or other tools for magnet/ed2k links")
+		// Attempt direct PutURL — if the storage does not implement PutURL,
+		// err will be errs.NotImplement (meaning "not supported by this driver"),
+		// which is a legitimate result and is returned as-is to the caller.
+		return nil, tryPutUrl(ctx, args.DstDirPath, args.URL)
 	}
 
 	// ed2k 链接自动路由：如果当前工具不支持 ed2k，自动尝试使用迅雷系工具
@@ -184,12 +187,9 @@ func tryPutUrl(ctx context.Context, path, urlStr string) error {
 	var dstName string
 	u, err := url.Parse(urlStr)
 	if err == nil {
-		// 只支持 HTTP/HTTPS 协议，其他协议（magnet、ed2k 等）返回 NotImplement
-		if u.Scheme != "" && u.Scheme != "http" && u.Scheme != "https" {
-			return errors.WithStack(errs.NotImplement)
-		}
 		dstName = stdpath.Base(u.Path)
-	} else {
+	}
+	if dstName == "" || dstName == "." || dstName == "/" {
 		dstName = "UnnamedURL"
 	}
 	return fs.PutURL(ctx, path, dstName, urlStr)
