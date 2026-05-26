@@ -13,6 +13,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/mholt/archives"
+	log "github.com/sirupsen/logrus"
 )
 
 func getFs(ss *stream.SeekableStream, args model.ArchiveArgs) (*archives.ArchiveFS, error) {
@@ -78,7 +79,6 @@ func decompress(fsys fs2.FS, filePath, targetPath string, up model.UpdateProgres
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	_, err = utils.CopyWithBuffer(f, &stream.ReaderUpdatingProgress{
 		Reader: &stream.SimpleReaderWithSize{
 			Reader: rc,
@@ -86,5 +86,15 @@ func decompress(fsys fs2.FS, filePath, targetPath string, up model.UpdateProgres
 		},
 		UpdateProgress: up,
 	})
-	return err
+	_ = f.Close()
+	if err != nil {
+		return err
+	}
+	// Preserve the modification time stored in the archive entry.
+	if modTime := stat.ModTime(); !modTime.IsZero() {
+		if err := os.Chtimes(destPath, modTime, modTime); err != nil {
+			log.Errorf("[archive] failed to preserve mtime of %s: %s", destPath, err)
+		}
+	}
+	return nil
 }
