@@ -114,20 +114,39 @@ func transfer(ctx context.Context, taskType taskType, srcObjPath, dstDirPath str
 		if utils.IsBool(skipHook...) {
 			ctx = context.WithValue(ctx, conf.SkipHookKey, struct{}{})
 		}
+
+		// Try native same-storage operations first.
 		if taskType == copy || taskType == merge {
 			err = op.Copy(ctx, srcStorage, srcObjActualPath, dstDirActualPath)
-			if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.NotSupport) {
-				return nil, err
+
+			// Native copy succeeded.
+			if err == nil {
+				return nil, nil
 			}
+
+			// Fall back to streaming transfer for copy/merge.
+			// This is needed for some platforms/drivers
+			// such as Android SAF/FUSE where native copy
+			// may fail even though normal streaming works.
 		} else {
 			err = op.Move(ctx, srcStorage, srcObjActualPath, dstDirActualPath)
-			if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.NotSupport) {
+
+			// Native move succeeded.
+			if err == nil {
+				return nil, nil
+			}
+
+			// Keep original behavior for move operations.
+			// We do not silently fall back because move
+			// should preserve atomic semantics.
+			if !errors.Is(err, errs.NotImplement) &&
+				!errors.Is(err, errs.NotSupport) {
 				return nil, err
 			}
 		}
 	}
 
-	// not in the same storage
+	// Fallback streaming transfer path
 	t := &FileTransferTask{
 		TaskData: TaskData{
 			SrcStorage:    srcStorage,
@@ -142,37 +161,58 @@ func transfer(ctx context.Context, taskType taskType, srcObjPath, dstDirPath str
 
 	t.groupID = stdpath.Join(t.DstStorageMp, t.DstActualPath)
 	task_group.TransferCoordinator.AddTask(t.groupID, nil)
+
 	if ctx.Value(conf.NoTaskKey) != nil {
 		var callback func(nextTask *FileTransferTask) error
 		hasSuccess := false
+
 		callback = func(nextTask *FileTransferTask) error {
 			nextTask.Base.SetCtx(ctx)
+
 			err := nextTask.RunWithNextTaskCallback(callback)
 			if err == nil {
 				hasSuccess = true
 			}
+
 			return err
 		}
+
 		t.Base.SetCtx(ctx)
+
 		err = t.RunWithNextTaskCallback(callback)
 		if err == nil {
 			hasSuccess = true
 		}
+
 		if taskType == move {
-			task_group.TransferCoordinator.AppendPayload(t.groupID, task_group.SrcPathToRemove(srcObjPath))
+			task_group.TransferCoordinator.AppendPayload(
+				t.groupID,
+				task_group.SrcPathToRemove(srcObjPath),
+			)
 		}
-		task_group.TransferCoordinator.Done(context.WithoutCancel(ctx), t.groupID, hasSuccess)
+
+		task_group.TransferCoordinator.Done(
+			context.WithoutCancel(ctx),
+			t.groupID,
+			hasSuccess,
+		)
+
 		return nil, err
 	}
 
 	t.Creator, _ = ctx.Value(conf.UserKey).(*model.User)
 	t.ApiUrl = common.GetApiUrl(ctx)
+
 	if taskType == copy || taskType == merge {
 		CopyTaskManager.Add(t)
 	} else {
-		task_group.TransferCoordinator.AppendPayload(t.groupID, task_group.SrcPathToRemove(srcObjPath))
+		task_group.TransferCoordinator.AppendPayload(
+			t.groupID,
+			task_group.SrcPathToRemove(srcObjPath),
+		)
 		MoveTaskManager.Add(t)
 	}
+
 	return t, nil
 }
 
