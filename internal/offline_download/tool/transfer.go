@@ -10,6 +10,7 @@ import (
 	"time"
 
 	_189pc "github.com/OpenListTeam/OpenList/v4/drivers/189pc"
+	"github.com/OpenListTeam/OpenList/v4/drivers/local"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -197,14 +198,26 @@ func transferStdPath(t *TransferTask) error {
 }
 
 func transferStdFile(t *TransferTask) error {
+	info, err := os.Stat(t.SrcActualPath)
+	if err != nil {
+		return errors.Wrapf(err, "failed to stat file %s", t.SrcActualPath)
+	}
+
+	// If the destination is a local storage driver, attempt an os.Rename first.
+	// This is a zero-copy atomic move when src and dst are on the same filesystem,
+	// avoiding a full read-write cycle that wastes I/O and reduces disk lifespan.
+	if localDst, ok := t.DstStorage.(*local.Local); ok {
+		if localDst.TryRenameFromTemp(t.SrcActualPath, t.DstActualPath) {
+			log.Debugf("[transfer] renamed %s to [%s](%s) (zero-copy)", t.SrcActualPath, t.DstStorageMp, t.DstActualPath)
+			return nil
+		}
+		// Rename failed (e.g. cross-device); fall through to normal stream copy.
+		log.Debugf("[transfer] rename failed for %s, falling back to stream copy", t.SrcActualPath)
+	}
+
 	rc, err := os.Open(t.SrcActualPath)
 	if err != nil {
 		return errors.Wrapf(err, "failed to open file %s", t.SrcActualPath)
-	}
-	info, err := rc.Stat()
-	if err != nil {
-		rc.Close()
-		return errors.Wrapf(err, "failed to get file %s", t.SrcActualPath)
 	}
 
 	// 尝试对天翼云进行秒传（计算 MD5 + sliceMD5）
