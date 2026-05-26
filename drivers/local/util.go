@@ -1,7 +1,3 @@
-
-bash
-
-cat > /mnt/user-data/outputs/util.go << 'EOF'
 package local
 
 import (
