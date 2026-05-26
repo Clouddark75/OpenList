@@ -1,3 +1,7 @@
+
+bash
+
+cat > /mnt/user-data/outputs/util.go << 'EOF'
 package local
 
 import (
@@ -22,6 +26,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/disintegration/imaging"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
+	log "github.com/sirupsen/logrus"
 )
 
 func isSymlinkDir(f fs.FileInfo, path string) bool {
@@ -417,9 +422,16 @@ func (d *Local) tryCopy(srcPath, dstPath string, info os.FileInfo) error {
 	} else if info.Mode()&os.ModeNamedPipe != 0 {
 		return copyNamedPipe(dstPath, info.Mode(), os.FileMode(d.mkdirPerm))
 	} else if info.IsDir() {
-		return d.recurAndTryCopy(srcPath, dstPath)
+		return d.recurAndTryCopy(srcPath, dstPath, info)
 	} else {
-		return tryReflinkCopy(srcPath, dstPath)
+		if err := tryReflinkCopy(srcPath, dstPath); err != nil {
+			return err
+		}
+		// Preserve the source modification time after a successful reflink/copy.
+		if err := os.Chtimes(dstPath, info.ModTime(), info.ModTime()); err != nil {
+			log.Errorf("[local] failed to preserve mtime of %s: %s", dstPath, err)
+		}
+		return nil
 	}
 }
 
@@ -447,7 +459,9 @@ func (d *Local) copySymlink(srcPath, dstPath string) error {
 	return os.Symlink(linkOrig, dstPath)
 }
 
-func (d *Local) recurAndTryCopy(srcPath, dstPath string) error {
+// recurAndTryCopy recursively copies srcPath into dstPath, preserving
+// modification times on all files and directories.
+func (d *Local) recurAndTryCopy(srcPath, dstPath string, info os.FileInfo) error {
 	err := os.MkdirAll(dstPath, os.FileMode(d.mkdirPerm))
 	if err != nil {
 		return err
@@ -456,6 +470,7 @@ func (d *Local) recurAndTryCopy(srcPath, dstPath string) error {
 	if err != nil {
 		return err
 	}
+	// Copy files first, then directories (matches original order)
 	for _, f := range files {
 		if !f.IsDir() {
 			sp := filepath.Join(srcPath, f.Name())
@@ -469,9 +484,17 @@ func (d *Local) recurAndTryCopy(srcPath, dstPath string) error {
 		if f.IsDir() {
 			sp := filepath.Join(srcPath, f.Name())
 			dp := filepath.Join(dstPath, f.Name())
-			if err = d.recurAndTryCopy(sp, dp); err != nil {
+			if err = d.tryCopy(sp, dp, f); err != nil {
 				return err
 			}
+		}
+	}
+	// Restore the directory's own mtime after all children have been written.
+	// Writing children updates the parent directory's mtime, so this must be
+	// done last.
+	if info != nil {
+		if err := os.Chtimes(dstPath, info.ModTime(), info.ModTime()); err != nil {
+			log.Errorf("[local] failed to preserve mtime of dir %s: %s", dstPath, err)
 		}
 	}
 	return nil
@@ -484,3 +507,4 @@ func tryReflinkCopy(srcPath, dstPath string) error {
 	}
 	return err
 }
+EOF
