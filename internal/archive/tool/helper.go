@@ -10,6 +10,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
+	log "github.com/sirupsen/logrus"
 )
 
 type SubFile interface {
@@ -190,24 +191,31 @@ func _decompress(file SubFile, targetPath, password string, up model.UpdateProgr
 		return err
 	}
 	defer func() { _ = rc.Close() }()
-	destPath := filepath.Join(targetPath, file.FileInfo().Name())
+	info := file.FileInfo()
+	destPath := filepath.Join(targetPath, info.Name())
 	if !strings.HasPrefix(destPath, targetPath+string(os.PathSeparator)) {
-		return fmt.Errorf("illegal file path: %s", file.FileInfo().Name())
+		return fmt.Errorf("illegal file path: %s", info.Name())
 	}
 	f, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
 	_, err = io.Copy(f, &stream.ReaderUpdatingProgress{
 		Reader: &stream.SimpleReaderWithSize{
 			Reader: rc,
-			Size:   file.FileInfo().Size(),
+			Size:   info.Size(),
 		},
 		UpdateProgress: up,
 	})
+	_ = f.Close()
 	if err != nil {
 		return err
+	}
+	// Preserve the modification time stored in the archive entry.
+	if modTime := info.ModTime(); !modTime.IsZero() {
+		if err := os.Chtimes(destPath, modTime, modTime); err != nil {
+			log.Errorf("[archive] failed to preserve mtime of %s: %s", destPath, err)
+		}
 	}
 	return nil
 }
