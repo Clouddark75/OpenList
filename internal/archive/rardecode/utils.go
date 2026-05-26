@@ -15,6 +15,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/nwaples/rardecode/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 type VolumeFile struct {
@@ -213,7 +214,6 @@ func _decompress(reader *rardecode.Reader, header *rardecode.FileHeader, targetP
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
 	_, err = io.Copy(f, &stream.ReaderUpdatingProgress{
 		Reader: &stream.SimpleReaderWithSize{
 			Reader: reader,
@@ -221,8 +221,15 @@ func _decompress(reader *rardecode.Reader, header *rardecode.FileHeader, targetP
 		},
 		UpdateProgress: up,
 	})
+	_ = f.Close()
 	if err != nil {
 		return err
+	}
+	// Preserve the modification time stored in the RAR entry.
+	if modTime := header.ModificationTime; !modTime.IsZero() {
+		if err := os.Chtimes(destPath, modTime, modTime); err != nil {
+			log.Errorf("[archive/rar] failed to preserve mtime of %s: %s", destPath, err)
+		}
 	}
 	return nil
 }
