@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -206,6 +207,9 @@ func (d *OpenList) Put(ctx context.Context, dstDir model.Obj, s model.FileStream
 	req.Header.Set("Authorization", d.Token)
 	req.Header.Set("File-Path", path.Join(dstDir.GetPath(), s.GetName()))
 	req.Header.Set("Password", d.MetaPassword)
+	// Preserve the source file's modification time on the remote server.
+	// The server's getLastModified() expects Unix milliseconds as a string.
+	req.Header.Set("Last-Modified", strconv.FormatInt(s.ModTime().UnixMilli(), 10))
 	if md5 := s.GetHash().GetHash(utils.MD5); len(md5) > 0 {
 		req.Header.Set("X-File-Md5", md5)
 	}
@@ -217,8 +221,6 @@ func (d *OpenList) Put(ctx context.Context, dstDir model.Obj, s model.FileStream
 	}
 
 	req.ContentLength = s.GetSize()
-	// client := base.NewHttpClient()
-	// client.Timeout = time.Hour * 6
 	res, err := base.HttpClient.Do(req)
 	if err != nil {
 		return err
