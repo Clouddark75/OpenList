@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/drivers/local"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -242,23 +243,33 @@ func (t *ArchiveContentUploadTask) RunWithNextTaskCallback(f func(nextTask *Arch
 				return errs.ObjectAlreadyExists
 			}
 		}
+		t.SetTotalBytes(info.Size())
+		t.status = "uploading"
+		// If the destination is a local storage, attempt a zero-copy rename from
+		// the temp file instead of streaming the full file through op.Put.
+		if localDst, ok := t.dstStorage.(*local.Local); ok {
+			if localDst.TryRenameFromTemp(t.FilePath, t.DstActualPath) {
+				log.Debugf("[archive] renamed %s to [%s](%s) (zero-copy)", t.FilePath, t.DstStorageMp, t.DstActualPath)
+				t.deleteSrcFile()
+				return nil
+			}
+			log.Debugf("[archive] rename failed for %s, falling back to stream copy", t.FilePath)
+		}
 		file, err := os.Open(t.FilePath)
 		if err != nil {
 			return err
 		}
-		t.SetTotalBytes(info.Size())
 		fs := &stream.FileStream{
 			Obj: &model.Object{
 				Name:     t.ObjName,
 				Size:     info.Size(),
-				Modified: time.Now(),
+				Modified: info.ModTime(), // preserve the mtime from the archive entry
 			},
 			Mimetype:     utils.GetMimeType(stdpath.Ext(t.ObjName)),
 			WebPutAsTask: true,
 			Reader:       file,
 		}
 		fs.Closers.Add(file)
-		t.status = "uploading"
 		err = op.Put(context.WithValue(t.Ctx(), conf.SkipHookKey, struct{}{}), t.dstStorage, t.DstActualPath, fs, t.SetProgress)
 		if err != nil {
 			return err
