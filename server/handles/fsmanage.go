@@ -119,6 +119,7 @@ func FsMove(c *gin.Context) {
 			req.Names[i] = ""
 			continue
 		}
+		req.Names[i] = srcPath
 		if !req.Overwrite {
 			base := stdpath.Base(srcPath)
 			if base == "." || base == "/" {
@@ -134,9 +135,10 @@ func FsMove(c *gin.Context) {
 					req.Names[i] = ""
 					continue
 				}
+				req.Names[i] = ""
+				continue
 			}
 		}
-		req.Names[i] = srcPath
 	}
 
 	// Create all tasks immediately without any synchronous validation
@@ -225,6 +227,7 @@ func FsCopy(c *gin.Context) {
 			req.Names[i] = ""
 			continue
 		}
+		req.Names[i] = srcPath
 		if !req.Overwrite {
 			base := stdpath.Base(srcPath)
 			if base == "." || base == "/" {
@@ -262,7 +265,6 @@ func FsCopy(c *gin.Context) {
 				continue
 			}
 		}
-		req.Names[i] = srcPath
 	}
 
 	// Create all tasks immediately without any synchronous validation
