@@ -207,7 +207,7 @@ func transferStdFile(t *TransferTask) error {
 	// This is a zero-copy atomic move when src and dst are on the same filesystem,
 	// avoiding a full read-write cycle that wastes I/O and reduces disk lifespan.
 	if localDst, ok := t.DstStorage.(*local.Local); ok {
-		if localDst.TryRenameFromTemp(t.SrcActualPath, t.DstActualPath) {
+		if localDst.TryRenameFromTemp(t.SrcActualPath, t.DstActualPath, filepath.Base(t.SrcActualPath)) {
 			log.Debugf("[transfer] renamed %s to [%s](%s) (zero-copy)", t.SrcActualPath, t.DstStorageMp, t.DstActualPath)
 			return nil
 		}
