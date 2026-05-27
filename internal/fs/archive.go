@@ -248,7 +248,7 @@ func (t *ArchiveContentUploadTask) RunWithNextTaskCallback(f func(nextTask *Arch
 		// If the destination is a local storage, attempt a zero-copy rename from
 		// the temp file instead of streaming the full file through op.Put.
 		if localDst, ok := t.dstStorage.(*local.Local); ok {
-			if localDst.TryRenameFromTemp(t.FilePath, t.DstActualPath) {
+			if localDst.TryRenameFromTemp(t.FilePath, t.DstActualPath, t.ObjName) {
 				log.Debugf("[archive] renamed %s to [%s](%s) (zero-copy)", t.FilePath, t.DstStorageMp, t.DstActualPath)
 				t.deleteSrcFile()
 				return nil
