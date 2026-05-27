@@ -447,11 +447,13 @@ func (d *Local) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
 // TryRenameFromTemp attempts to move a file from an OS temp path (e.g. offline
 // download temp dir) directly into dstDirPath using os.Rename, which is atomic
 // and zero-copy when src and dst are on the same filesystem.
+// dstName is the final filename at the destination (may differ from the temp
+// file's basename, which is typically a random identifier).
 // Returns true if the rename succeeded; false if the caller should fall back to
 // a normal stream-based upload (e.g. cross-device move).
-func (d *Local) TryRenameFromTemp(srcPath, dstDirActualPath string) bool {
+func (d *Local) TryRenameFromTemp(srcPath, dstDirActualPath, dstName string) bool {
 	dstDirFull := filepath.Join(d.GetRootPath(), dstDirActualPath)
-	dstPath := filepath.Join(dstDirFull, filepath.Base(srcPath))
+	dstPath := filepath.Join(dstDirFull, dstName)
 	if err := os.Rename(srcPath, dstPath); err != nil {
 		return false
 	}
