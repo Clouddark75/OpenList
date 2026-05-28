@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -116,6 +117,10 @@ func (d *WebDav) Put(ctx context.Context, dstDir model.Obj, s model.FileStreamer
 	callback := func(r *http.Request) {
 		r.Header.Set("Content-Type", s.GetMimetype())
 		r.ContentLength = s.GetSize()
+		// Send modification time using the X-OC-Mtime header (Unix seconds),
+		// which is the WebDAV standard used by ownCloud, Nextcloud and rclone.
+		// The OpenList WebDAV server reads this via getModTime().
+		r.Header.Set("X-OC-Mtime", strconv.FormatInt(s.ModTime().Unix(), 10))
 	}
 	reader := driver.NewLimitedUploadStream(ctx, &driver.ReaderUpdatingProgress{
 		Reader:         s,
@@ -143,4 +148,3 @@ func (d *WebDav) Get(ctx context.Context, _path string) (model.Obj, error) {
 }
 
 var _ driver.Driver = (*WebDav)(nil)
-var _ driver.Getter = (*WebDav)(nil)
