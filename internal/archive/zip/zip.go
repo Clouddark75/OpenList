@@ -17,7 +17,7 @@ type Zip struct {
 }
 
 func (z *Zip) AcceptedExtensions() []string {
-	return []string{".zip"}
+	return []string{".livp", ".zip"}
 }
 
 func (z *Zip) AcceptedMultipartExtensions() map[string]tool.MultipartExtension {

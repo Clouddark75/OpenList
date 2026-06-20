@@ -13,6 +13,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/net"
 	"github.com/OpenListTeam/OpenList/v4/internal/offline_download/tool"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -23,7 +24,6 @@ const (
 )
 
 type SimpleHttp struct {
-	client http.Client
 }
 
 func (s SimpleHttp) Name() string {
@@ -69,8 +69,7 @@ func (s SimpleHttp) Run(task *tool.DownloadTask) error {
 	if streamPut {
 		req.Header.Set("Range", "bytes=0-")
 	}
-
-	resp, err := s.client.Do(req)
+	resp, err := net.HttpClient().Do(req)
 	if err != nil {
 		return err
 	}
