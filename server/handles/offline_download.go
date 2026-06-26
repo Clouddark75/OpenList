@@ -484,10 +484,29 @@ type AddOfflineDownloadReq struct {
 	DeletePolicy string   `json:"delete_policy"`
 }
 
+// knownSchemes is the list of URL scheme prefixes that splitURLs recognises
+// as boundaries between concatenated URLs.
+// Schemes that use "://" (ed2k, ftp, …) will be split naturally by the
+// generic "://" boundary pass; only schemes that don't use "//" need an
+// explicit entry here.
+var knownSchemes = []string{
+	"https://",
+	"http://",
+	"ftps://",
+	"ftp://",
+	"magnet:",
+	"ed2k://",
+}
+
 // splitURLs expands a slice of URL strings by splitting any concatenated
-// HTTP/HTTPS URLs within a single entry into individual URLs.
-// For example, "https://a.comhttps://b.com" becomes ["https://a.com", "https://b.com"].
-// Non-HTTP schemes (magnet:, ed2k://, etc.) are returned as-is.
+// URLs within a single entry into individual URLs.
+//
+// Examples:
+//
+//	"https://a.comhttps://b.com"           → ["https://a.com", "https://b.com"]
+//	"magnet:?amagnet:?b"                   → ["magnet:?a", "magnet:?b"]
+//	"magnet:?ahttps://b.com"               → ["magnet:?a", "https://b.com"]
+//	"ed2k://aed2k://b"                     → ["ed2k://a", "ed2k://b"]
 func splitURLs(urls []string) []string {
 	var result []string
 	for _, raw := range urls {
@@ -495,25 +514,31 @@ func splitURLs(urls []string) []string {
 		if raw == "" {
 			continue
 		}
-		// Only attempt to split entries that contain HTTP/HTTPS URLs.
-		// Non-HTTP schemes (magnet, ed2k, ftp, etc.) won't contain
-		// "http://" or "https://" mid-string, so they pass through unchanged.
-		if !strings.Contains(raw, "http://") && !strings.Contains(raw, "https://") {
-			result = append(result, raw)
-			continue
+		result = append(result, splitConcatenated(raw)...)
+	}
+	return result
+}
+
+// splitConcatenated splits a single string that may contain multiple
+// concatenated URLs into a slice of individual URL strings.
+func splitConcatenated(s string) []string {
+	// Replace every known scheme with a sentinel prefix so we can split on a
+	// single unique delimiter regardless of which schemes are present.
+	const delim = "\x00URL\x00"
+	normalized := s
+	for _, scheme := range knownSchemes {
+		normalized = strings.ReplaceAll(normalized, scheme, delim+scheme)
+	}
+	parts := strings.Split(normalized, delim)
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
 		}
-		// Insert a null-byte sentinel before every http:// and https://,
-		// then split on that sentinel. This correctly handles all combinations:
-		// https://+https://, http://+http://, and mixed http://+https://.
-		raw = strings.ReplaceAll(raw, "https://", "\x00https://")
-		raw = strings.ReplaceAll(raw, "http://", "\x00http://")
-		parts := strings.Split(raw, "\x00")
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				result = append(result, part)
-			}
-		}
+	}
+	if len(result) == 0 {
+		return []string{s}
 	}
 	return result
 }
