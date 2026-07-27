@@ -70,11 +70,10 @@ require (
 	github.com/spf13/afero v1.15.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	github.com/t3rm1n4l/go-mega v0.0.0-20260630094356-4de2f127f34a
+	github.com/t3rm1n4l/go-mega v0.0.0-20260717075258-c6acd6a5bd04
 	github.com/tchap/go-patricia/v2 v2.3.3
 	github.com/u2takey/ffmpeg-go v0.5.0
 	github.com/upyun/go-sdk/v3 v3.0.4
-	github.com/winfsp/cgofuse v1.6.1-0.20260126094232-f2c4fccdb286
 	github.com/zzzhr1990/go-common-entity v0.0.0-20250202070650-1a200048f0d3
 	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.43.0
