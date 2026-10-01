@@ -113,6 +113,10 @@ func FsMove(c *gin.Context) {
 		srcDir += "/"
 	}
 	for i, name := range req.Names {
+		if err := checkRelativePath(name); err != nil {
+			common.ErrorResp(c, err, 403)
+			return
+		}
 		// ensure req.Names is not a relative path
 		srcPath := stdpath.Join(srcDir, name)
 		if !strings.HasPrefix(srcPath+"/", srcDir) {
@@ -221,6 +225,10 @@ func FsCopy(c *gin.Context) {
 	}
 	useMergeForIndex := make(map[int]bool)
 	for i, name := range req.Names {
+		if err := checkRelativePath(name); err != nil {
+			common.ErrorResp(c, err, 403)
+			return
+		}
 		// ensure req.Names is not a relative path
 		srcPath := stdpath.Join(srcDir, name)
 		if !strings.HasPrefix(srcPath+"/", srcDir) {
@@ -400,6 +408,10 @@ func FsRemove(c *gin.Context) {
 		reqPath += "/"
 	}
 	for i, name := range req.Names {
+		if err := checkRelativePath(name); err != nil {
+			common.ErrorResp(c, err, 403)
+			return
+		}
 		fullPath := stdpath.Join(reqPath, name)
 		if !strings.HasPrefix(fullPath+"/", reqPath) {
 			req.Names[i] = ""
