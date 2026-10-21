@@ -135,11 +135,8 @@ func FsMove(c *gin.Context) {
 				if !req.SkipExisting {
 					common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
 					return
-				} else {
-					// Archivo existe y skipExisting está activo -> marcar como vacío para saltar
-					req.Names[i] = ""
-					continue
 				}
+				// Existe en destino y skip_existing está activo: se salta
 				req.Names[i] = ""
 				continue
 			}
@@ -260,24 +257,22 @@ func FsCopy(c *gin.Context) {
 					return
 				}
 
-				// Verificar si origen es directorio
+				// Verificar si el origen es directorio
 				srcRes, _ := fs.Get(c.Request.Context(), srcPath, &fs.GetArgs{NoLog: true})
 
 				if req.SkipExisting && srcRes != nil && srcRes.IsDir() && dstRes.IsDir() {
-					// Skip está activo, ambos son directorios -> usar merge automáticamente
+					// Skip activo y ambos son directorios -> merge automático
 					useMergeForIndex[i] = true
-					req.Names[i] = srcPath
 					continue
 				}
 
 				if req.Merge && dstRes.IsDir() {
-					// Merge manual está activo y destino es directorio
+					// Merge manual y el destino es directorio
 					useMergeForIndex[i] = true
-					req.Names[i] = srcPath
 					continue
 				}
 
-				// En otros casos (archivo existe, no es directorio, etc.) -> skip
+				// Otros casos (archivo existente, tipos distintos, etc.) -> se salta
 				req.Names[i] = ""
 				continue
 			}
@@ -663,5 +658,5 @@ func Link(c *gin.Context) {
 		return
 	}
 	defer link.Close()
-	common.SuccessResp(c)
+	common.SuccessResp(c, link)
 }
