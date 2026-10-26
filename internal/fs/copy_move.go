@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
-	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -16,9 +15,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/task_group"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/OpenListTeam/tache"
-	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 )
 
 type taskType uint8
@@ -102,78 +99,6 @@ func (t *FileTransferTask) SetRetry(retry int, maxRetry int) {
 	}
 }
 
-func supportsNamedNativeCopy(storage driver.Driver) bool {
-	_, hasMkdir := storage.(driver.Mkdir)
-	if !hasMkdir {
-		_, hasMkdir = storage.(driver.MkdirResult)
-	}
-	_, hasCopy := storage.(driver.Copy)
-	if !hasCopy {
-		_, hasCopy = storage.(driver.CopyResult)
-	}
-	_, hasMove := storage.(driver.Move)
-	if !hasMove {
-		_, hasMove = storage.(driver.MoveResult)
-	}
-	_, hasRename := storage.(driver.Rename)
-	if !hasRename {
-		_, hasRename = storage.(driver.RenameResult)
-	}
-	_, hasRemove := storage.(driver.Remove)
-	return hasMkdir && hasCopy && hasMove && hasRename && hasRemove
-}
-
-func namedCopyStageObjectPath(stageDirPath, srcPath, dstName string) string {
-	name := stdpath.Base(srcPath)
-	if dstName != "" {
-		name = dstName
-	}
-	return stdpath.Join(stageDirPath, name)
-}
-
-func copyNamedInStorage(ctx context.Context, storage driver.Driver, srcPath, dstDirPath, dstName string) error {
-	stageDirPath := stdpath.Join(dstDirPath, ".openlist-copy-"+uuid.NewString())
-	stageCtx := context.WithValue(ctx, conf.SkipHookKey, struct{}{})
-	if err := op.MakeDir(stageCtx, storage, stageDirPath); err != nil {
-		return errors.WithMessage(err, "failed create copy staging directory")
-	}
-	stageCreated := true
-	removeStage := func() error {
-		return op.Remove(stageCtx, storage, stageDirPath)
-	}
-	defer func() {
-		if !stageCreated {
-			return
-		}
-		if err := removeStage(); err != nil {
-			log.WithError(err).Warnf("copy staging directory remains and requires cleanup: %s", stageDirPath)
-		}
-	}()
-
-	if err := op.Copy(stageCtx, storage, srcPath, stageDirPath); err != nil {
-		return errors.WithMessage(err, "failed copy object into staging directory")
-	}
-	srcName := stdpath.Base(srcPath)
-	stageObjPath := namedCopyStageObjectPath(stageDirPath, srcPath, "")
-	if srcName != dstName {
-		if err := op.Rename(stageCtx, storage, stageObjPath, dstName); err != nil {
-			return errors.WithMessage(err, "failed rename object in staging directory")
-		}
-		stageObjPath = namedCopyStageObjectPath(stageDirPath, srcPath, dstName)
-	}
-	// Staging operations suppress hooks so intermediate paths stay invisible.
-	// The final move intentionally uses the caller context to publish the target
-	// and trigger the normal cache/update hooks exactly once.
-	if err := op.Move(ctx, storage, stageObjPath, dstDirPath); err != nil {
-		return errors.WithMessage(err, "failed move copied object from staging directory")
-	}
-	if err := removeStage(); err != nil {
-		return errors.WithMessagef(err, "failed remove copy staging directory %s; cleanup will be retried", stageDirPath)
-	}
-	stageCreated = false
-	return nil
-}
-
 func transfer(ctx context.Context, taskType taskType, srcObjPath, dstDirPath, dstName string, skipHook ...bool) (task.TaskExtensionInfo, error) {
 	srcStorage, srcObjActualPath, err := op.GetStorageAndActualPath(srcObjPath)
 	if err != nil {
@@ -191,14 +116,9 @@ func transfer(ctx context.Context, taskType taskType, srcObjPath, dstDirPath, ds
 
 		// Try native same-storage operations first.
 		if taskType == copy || taskType == merge {
-			if dstName != "" {
-				if supportsNamedNativeCopy(srcStorage) {
-					err = copyNamedInStorage(ctx, srcStorage, srcObjActualPath, dstDirActualPath, dstName)
-					if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.NotSupport) {
-						return nil, err
-					}
-				}
-			} else {
+			// Native copy cannot rename, so named copies go through the
+			// streaming transfer below (no intermediate staging copy).
+			if dstName == "" {
 				err = op.Copy(ctx, srcStorage, srcObjActualPath, dstDirActualPath)
 				if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.NotSupport) {
 					return nil, err
