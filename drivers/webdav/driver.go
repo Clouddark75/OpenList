@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -135,6 +136,11 @@ func (d *WebDav) Put(ctx context.Context, dstDir model.Obj, s model.FileStreamer
 func (d *WebDav) Get(ctx context.Context, _path string) (model.Obj, error) {
 	_path = path.Join(d.GetRootPath(), _path)
 	info, err := d.client.Stat(_path)
+	if err != nil && !gowebdav.IsErrNotFound(err) && !strings.HasSuffix(_path, "/") {
+		// As in RFC 4918 Section 5.2, retry failed slash-less collection PROPFINDs
+                // once with the canonical trailing-slash URL
+		info, err = d.client.Stat(_path + "/")
+	}
 	if err != nil {
 		if gowebdav.IsErrNotFound(err) {
 			return nil, errs.ObjectNotFound
